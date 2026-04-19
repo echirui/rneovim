@@ -14,6 +14,26 @@ pub fn trigger_autocmd(state: &mut VimState, event: AutoCmdEvent) {
     }
 }
 
+pub fn find_project_root(path: &str) -> String {
+    let mut current = std::path::Path::new(path);
+    if current.is_file() {
+        if let Some(p) = current.parent() { current = p; }
+    }
+    
+    let mut search = current;
+    loop {
+        if search.join("Cargo.toml").exists() || search.join(".git").exists() || search.join("pyrightconfig.json").exists() {
+            return search.display().to_string();
+        }
+        if let Some(parent) = search.parent() {
+            search = parent;
+        } else {
+            break;
+        }
+    }
+    std::env::current_dir().unwrap_or_default().display().to_string()
+}
+
 pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
     // マクロ記録中ならリクエストを保存
     if state.macro_recording.is_some() {
@@ -26,14 +46,29 @@ pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
             }
         }
     }
+handlers::state::handle(state, req.clone())?;
+handlers::edit::handle(state, req.clone())?;
+handlers::motion::handle(state, req.clone())?;
+handlers::window::handle(state, req.clone())?;
+handlers::cmdline::handle(state, req.clone())?;
 
-    handlers::state::handle(state, req.clone())?;
-    handlers::edit::handle(state, req.clone())?;
-    handlers::motion::handle(state, req.clone())?;
-    handlers::window::handle(state, req.clone())?;
-    handlers::cmdline::handle(state, req)?;
-    
-    // LSP同期
+match req {
+    Request::LspDefinition => {
+        if let Some(lsp) = &state.lsp_client {
+            let win = state.current_window();
+            let cur = win.cursor();
+            let buf = win.buffer();
+            if let Some(path) = buf.borrow().name() {
+                let uri = format!("file://{}", path);
+                lsp.send_definition(100, &uri, cur.row - 1, cur.col);
+            }
+        }
+    }
+    _ => {}
+}
+
+// LSP同期
+...
     if state.lsp_client.is_some() {
         for buf in &state.buffers {
             let mut b = buf.borrow_mut();
@@ -670,8 +705,16 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
         "lspstart" => {
             let cmd_args = parts[1..].join(" ");
             if let Ok(client) = crate::nvim::lsp::LspClient::new(&cmd_args, state.sender.clone()) {
-                let cwd = std::env::current_dir().unwrap_or_default().display().to_string();
-                let uri = format!("file://{}", cwd);
+                let win = state.current_window();
+                let buf = win.buffer();
+                let b = buf.borrow();
+                let root_dir = if let Some(path) = b.name() {
+                    find_project_root(path)
+                } else {
+                    std::env::current_dir().unwrap_or_default().display().to_string()
+                };
+                
+                let uri = format!("file://{}", root_dir);
                 client.send_initialize(&uri);
                 state.lsp_client = Some(client);
             }

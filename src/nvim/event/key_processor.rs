@@ -166,6 +166,7 @@ impl KeyProcessor {
             (None, Some('g'), 'a') => { state.pending_key = None; Some(Request::ExecuteCommandFromConfig("ascii".to_string())) }
             (None, Some('g'), '&') => { state.pending_key = None; Some(Request::ExecuteCommandFromConfig("%&".to_string())) }
             (None, Some('g'), 'v') => { state.pending_key = None; Some(Request::RestoreVisualSelection) }
+            (None, Some('g'), 'd') => { state.pending_key = None; Some(Request::LspDefinition) }
             (None, Some('g'), 'I') => { state.pending_key = None; Some(Request::InsertAtFirstColumn) }
             (None, Some('g'), 'i') => { state.pending_key = None; Some(Request::InsertAtLastInsert) }
             (None, Some('g'), 'J') => { state.pending_key = None; Some(Request::ExecuteCommandFromConfig("join!".to_string())) }

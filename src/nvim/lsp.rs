@@ -66,6 +66,32 @@ impl LspClient {
                                         let _ = tx_clone.send(msg);
                                     }
 
+                                    // Handle 'textDocument/definition' response (id: 100)
+                                    if j.get("id").and_then(|id| id.as_i64()) == Some(100) {
+                                        if let Some(result) = j.get("result") {
+                                            // result can be a Location or Location[]
+                                            let location = if result.is_array() {
+                                                result.get(0)
+                                            } else {
+                                                Some(result)
+                                            };
+
+                                            if let Some(loc) = location {
+                                                if let (Some(uri), Some(range)) = (loc.get("uri").and_then(|u| u.as_str()), loc.get("range")) {
+                                                    let path = if uri.starts_with("file://") { &uri[7..] } else { uri };
+                                                    let line = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0);
+                                                    let col = range.get("start").and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0);
+                                                    
+                                                    let path_string = path.to_string();
+                                                    let _ = event_sender.send(Box::new(move |state| {
+                                                        let _ = handle_request(state, Request::OpenFile(path_string));
+                                                        state.current_window_mut().set_cursor((line + 1) as usize, col as usize);
+                                                    }));
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     let _ = event_sender.send(Box::new(move |state| {
                                         if let Some(method) = j.get("method").and_then(|v| v.as_str()) {
                                             if method == "textDocument/publishDiagnostics" {
@@ -118,15 +144,50 @@ impl LspClient {
             "params": {
                 "processId": std::process::id(),
                 "rootUri": root_uri,
+                "rootPath": root_uri.replace("file://", ""),
                 "capabilities": {
                     "textDocument": {
                         "synchronization": {
                             "dynamicRegistration": true,
                             "willSave": true,
                             "willSaveWaitUntil": true,
-                            "didSave": true
+                            "didSave": true,
+                            "lineFoldingOnly": true
+                        },
+                        "completion": {
+                            "completionItem": {
+                                "snippetSupport": true
+                            }
+                        },
+                        "definition": {
+                            "dynamicRegistration": true
+                        },
+                        "hover": {
+                            "dynamicRegistration": true
                         }
+                    },
+                    "workspace": {
+                        "configuration": true,
+                        "workspaceFolders": true
                     }
+                }
+            }
+        });
+        let _ = self.tx.send(msg);
+    }
+
+    pub fn send_definition(&self, id: i64, uri: &str, line: usize, column: usize) {
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": {
+                    "uri": uri
+                },
+                "position": {
+                    "line": line, // 0-indexed
+                    "character": column
                 }
             }
         });
