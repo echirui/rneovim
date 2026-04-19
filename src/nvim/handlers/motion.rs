@@ -181,6 +181,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     let start_col = if cur.row == target.row { cur.col.min(target.col) } else { 0 };
                     {
                         let mut b = buf.borrow_mut();
+                        b.start_undo_group();
                         if cur.row == target.row {
                             let start = cur.col.min(target.col);
                             let end = cur.col.max(target.col);
@@ -194,6 +195,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                                 b.delete_line(start_row)?;
                             }
                         }
+                        b.end_undo_group();
                     }
                     let new_row = cur.row.min(buf.borrow().line_count());
                     state.current_window_mut().set_cursor(new_row, start_col);
@@ -503,18 +505,22 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     Operator::Delete => {
                         {
                             let mut b = buf.borrow_mut();
+                            b.start_undo_group();
                             if start.row == end.row {
                                 let count = end.col - start.col + 1;
                                 for _ in 0..count {
                                     b.delete_char(start.row, start.col + 1)?;
                                 }
                             } else {
-                                for _ in start.row..=end.row {
-                                    b.delete_line(start.row)?;
+                                let start_row = start.row;
+                                let end_row = end.row;
+                                for _ in start_row..=end_row {
+                                    b.delete_line(start_row)?;
                                 }
                             }
+                            b.end_undo_group();
                         }
-                        state.current_window_mut().set_cursor(start.row, start.col);
+                        state.current_window_mut().set_cursor(start.row.min(buf.borrow().line_count()), start.col);
                         state.last_change = Some(Request::OpTextObject { op, inner, obj });
                     },
                     Operator::Yank => {
@@ -529,6 +535,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     },
                     Operator::ToUpper | Operator::ToLower | Operator::SwapCase => {
                         let mut b = buf.borrow_mut();
+                        b.start_undo_group();
                         for r in start.row..=end.row {
                             if let Some(line) = b.get_line(r) {
                                 let mut chars: Vec<char> = line.chars().collect();
@@ -549,6 +556,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                                 let _ = b.set_line(r, &new_line);
                             }
                         }
+                        b.end_undo_group();
                     },
                     Operator::Change => {
                         let o = obj.clone();
