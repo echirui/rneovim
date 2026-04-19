@@ -336,10 +336,24 @@ impl VimState {
                                 if let Some(anchor) = self.visual_anchor {
                                     match vmode {
                                         VisualMode::Char => {
-                                            if lnum == anchor.row && lnum == win_cursor.row {
-                                                let min_col = anchor.col.min(win_cursor.col);
-                                                let max_col = anchor.col.max(win_cursor.col);
-                                                if c_idx >= min_col && c_idx <= max_col { bg = Color::Blue; fg = Color::White; }
+                                            let (v_start, v_end) = if anchor.row < win_cursor.row || (anchor.row == win_cursor.row && anchor.col <= win_cursor.col) {
+                                                (anchor, win_cursor)
+                                            } else {
+                                                (win_cursor, anchor)
+                                            };
+
+                                            if lnum > v_start.row && lnum < v_end.row {
+                                                // 行間全体
+                                                bg = Color::Blue; fg = Color::White;
+                                            } else if lnum == v_start.row && lnum == v_end.row {
+                                                // 同一行内
+                                                if c_idx >= v_start.col && c_idx <= v_end.col { bg = Color::Blue; fg = Color::White; }
+                                            } else if lnum == v_start.row {
+                                                // 開始行
+                                                if c_idx >= v_start.col { bg = Color::Blue; fg = Color::White; }
+                                            } else if lnum == v_end.row {
+                                                // 終了行
+                                                if c_idx <= v_end.col { bg = Color::Blue; fg = Color::White; }
                                             }
                                         }
                                         VisualMode::Line => {
