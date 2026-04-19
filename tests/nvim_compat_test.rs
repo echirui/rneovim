@@ -96,3 +96,32 @@ fn test_cw_special() {
     // cw on a word should not delete the following space
     assert_nvim_compat("import request\n", "cw\\x1b", "cw_special");
 }
+
+#[test]
+fn test_sample_file_edit() {
+    let content = "import requests
+
+# Send request to download Ramanujan's formula documentation
+url = \"https://en.wikipedia.org/wiki/Summation_of_eulerian_numbers\"
+response = requests.get(url)
+
+# Parse HTML content using BeautifulSoup
+from bs4 import BeautifulSoup
+soup = BeautifulSoup(response.content, 'html.parser')
+
+# Extract relevant formulas and equations from the webpage
+formulas = soup.find_all('span', {'class': 'latex'})
+
+for formula in formulas:
+    print(formula.text)
+";
+    // Operations:
+    // jjj (line 4) dw (delete 'url') -> NO, line 4 is url = ...
+    // jjj: line 1(import), 2(empty), 3(# Send), 4(url)
+    // let's do:
+    // jjjdw (line 4, delete 'url ')
+    // Gdd (delete last line)
+    // 5G (line 5) -> No 5G.
+    // jjjjj (line 6) dw (delete 'response ')
+    assert_nvim_compat(content, "jjjdwjjjjdwGdd", "sample_file_edit");
+}
