@@ -20,6 +20,73 @@ fn main() {
     let mut eloop = EventLoop::new();
     let processor = KeyProcessor::new();
 
+    // テストモードの判定
+    let mut test_keys = None;
+    let mut test_output = None;
+    let mut filename = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--test-keys" => {
+                if i + 1 < args.len() {
+                    test_keys = Some(args[i+1].clone());
+                    i += 1;
+                }
+            }
+            "--test-output" => {
+                if i + 1 < args.len() {
+                    test_output = Some(args[i+1].clone());
+                    i += 1;
+                }
+            }
+            _ if !args[i].starts_with('-') => {
+                filename = Some(args[i].clone());
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if let Some(keys) = test_keys {
+        if let Some(f) = filename {
+            let _ = handle_request(&mut state, Request::OpenFile(f));
+        }
+        
+        // 解析: \xNN 形式をバイトに変換
+        let mut processed_keys = String::new();
+        let mut chars = keys.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' && chars.peek() == Some(&'x') {
+                chars.next(); // skip 'x'
+                let mut hex = String::new();
+                if let Some(h1) = chars.next() { hex.push(h1); }
+                if let Some(h2) = chars.next() { hex.push(h2); }
+                if let Ok(val) = u8::from_str_radix(&hex, 16) {
+                    processed_keys.push(val as char);
+                }
+            } else {
+                processed_keys.push(c);
+            }
+        }
+
+        let _ = processor.process_keys(&mut state, &processed_keys);
+        
+        if let Some(out) = test_output {
+            let buf = state.current_window().buffer();
+            let b = buf.borrow();
+            let mut result = String::new();
+            for i in 1..=b.line_count() {
+                if let Some(line) = b.get_line(i) {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
+            std::fs::write(out, result).expect("Failed to write test output");
+        }
+        return;
+    }
+
     let (sender, _receiver) = mpsc::channel();
     state.sender = Some(sender.clone());
 

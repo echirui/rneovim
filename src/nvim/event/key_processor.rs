@@ -9,6 +9,15 @@ impl KeyProcessor {
         Self
     }
 
+    pub fn process_keys(&self, state: &mut VimState, keys: &str) -> Result<(), crate::nvim::error::NvimError> {
+        for c in keys.chars() {
+            if let Some(req) = self.process_key(state, c) {
+                handle_request(state, req)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn process_key(&self, state: &mut VimState, key: char) -> Option<Request> {
         if state.pending_key == Some('\x1C') {
             state.pending_key = None;

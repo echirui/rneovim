@@ -184,7 +184,10 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         b.start_undo_group();
                         if cur.row == target.row {
                             let start = cur.col.min(target.col);
-                            let end = cur.col.max(target.col);
+                            let mut end = cur.col.max(target.col);
+                            if !motion.is_inclusive() && end > start {
+                                end -= 1;
+                            }
                             for _ in start..=end {
                                 b.delete_char(cur.row, start + 1)?;
                             }
@@ -207,7 +210,10 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     if cur.row == target.row {
                         if let Some(line) = b.get_line(cur.row) {
                             let start = cur.col.min(target.col);
-                            let end = cur.col.max(target.col);
+                            let mut end = cur.col.max(target.col);
+                            if !motion.is_inclusive() && end > start {
+                                end -= 1;
+                            }
                             let text = line.chars().skip(start).take(end - start + 1).collect::<String>();
                             set_register_text(state, reg, text);
                         }
@@ -233,7 +239,13 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         if let Some(line) = b.get_line(r) {
                             let mut chars: Vec<char> = line.chars().collect();
                             let s_col = if r == start_row { cur.col.min(target.col) } else { 0 };
-                            let e_col = if r == end_row { cur.col.max(target.col).min(chars.len().saturating_sub(1)) } else { chars.len().saturating_sub(1) };
+                            let e_col = if r == end_row { 
+                                let mut ec = cur.col.max(target.col);
+                                if !motion.is_inclusive() && ec > s_col && r == start_row {
+                                    ec -= 1;
+                                }
+                                ec.min(chars.len().saturating_sub(1))
+                            } else { chars.len().saturating_sub(1) };
                             
                             for c_idx in s_col..=e_col {
                                 if let Some(&c) = chars.get(c_idx) {

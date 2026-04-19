@@ -58,6 +58,18 @@ pub enum Motion {
     WindowBottom,
 }
 
+impl Motion {
+    pub fn is_inclusive(&self) -> bool {
+        match self {
+            Motion::WordForwardEnd | Motion::WordForwardEndBlank |
+            Motion::WordBackwardEnd | Motion::WordBackwardEndBlank |
+            Motion::LineEnd | Motion::LineLastChar |
+            Motion::BufferEnd => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TextObject {
     Word,

@@ -410,31 +410,78 @@ impl Buffer {
             None => return Cursor { row: lnum, col },
         };
         let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+            if forward {
+                if lnum < self.line_count() { return Cursor { row: lnum + 1, col: 0 }; }
+            } else {
+                if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return Cursor { row: lnum - 1, col: prev.chars().count().saturating_sub(1) };
+                }
+            }
+            return Cursor { row: lnum, col: 0 };
+        }
+
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+        let is_symbol = |c: char| !c.is_alphanumeric() && c != '_' && !c.is_whitespace();
+
         if forward {
-            let mut found_space = false;
-            for i in (col + 1)..chars.len() {
-                let c = chars[i];
-                if c.is_whitespace() {
-                    found_space = true;
-                } else if found_space {
-                    return Cursor { row: lnum, col: i };
-                }
+            let mut i = col;
+            if i >= chars.len() {
+                if lnum < self.line_count() { return Cursor { row: lnum + 1, col: 0 }; }
+                return Cursor { row: lnum, col: chars.len().saturating_sub(1) };
             }
-            if lnum < self.line_count() {
-                return Cursor { row: lnum + 1, col: 0 };
+
+            let start_c = chars[i];
+            if is_word_char(start_c) {
+                // Word -> end of word -> skip space
+                while i < chars.len() && is_word_char(chars[i]) { i += 1; }
+                while i < chars.len() && chars[i].is_whitespace() { i += 1; }
+            } else if is_symbol(start_c) {
+                // Symbol -> end of symbols -> skip space
+                while i < chars.len() && is_symbol(chars[i]) { i += 1; }
+                while i < chars.len() && chars[i].is_whitespace() { i += 1; }
+            } else {
+                // Whitespace -> next non-space
+                while i < chars.len() && chars[i].is_whitespace() { i += 1; }
             }
-            Cursor { row: lnum, col: chars.len().saturating_sub(1) }
+
+            if i < chars.len() {
+                Cursor { row: lnum, col: i }
+            } else if lnum < self.line_count() {
+                Cursor { row: lnum + 1, col: 0 }
+            } else {
+                Cursor { row: lnum, col: chars.len().saturating_sub(1) }
+            }
         } else {
-            // Backward
-            let mut found_non_space = false;
-            for i in (0..col).rev() {
-                if !chars[i].is_whitespace() {
-                    found_non_space = true;
-                } else if found_non_space {
-                    return Cursor { row: lnum, col: i + 1 };
+            // Backward (b)
+            if col == 0 {
+                if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return Cursor { row: lnum - 1, col: prev.chars().count().saturating_sub(1) };
                 }
+                return Cursor { row: lnum, col: 0 };
             }
-            Cursor { row: lnum, col: 0 }
+
+            let mut i = col - 1;
+            // Skip initial whitespace
+            while i > 0 && chars[i].is_whitespace() { i -= 1; }
+            
+            if i == 0 && chars[i].is_whitespace() {
+                 if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return Cursor { row: lnum - 1, col: prev.chars().count().saturating_sub(1) };
+                }
+                return Cursor { row: lnum, col: 0 };
+            }
+
+            let target_c = chars[i];
+            if is_word_char(target_c) {
+                while i > 0 && is_word_char(chars[i-1]) { i -= 1; }
+            } else if is_symbol(target_c) {
+                while i > 0 && is_symbol(chars[i-1]) { i -= 1; }
+            }
+            Cursor { row: lnum, col: i }
         }
     }
 
