@@ -3,9 +3,9 @@ use serde::{Serialize, Deserialize};
 /// Represents a single atomic change to the buffer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
-    InsertLine { lnum: usize, text: String },
-    DeleteLine { lnum: usize, text: String },
-    ReplaceLine { lnum: usize, old_text: String, new_text: String },
+    InsertLine { lnum: usize, col: usize, text: String },
+    DeleteLine { lnum: usize, col: usize, text: String },
+    ReplaceLine { lnum: usize, col: usize, old_text: String, new_text: String },
     Group(Vec<Action>),
 }
 
@@ -86,11 +86,11 @@ mod tests {
         let mut tree = UndoTree::new();
         
         // 1. A を入力
-        tree.push(Action::InsertLine { lnum: 1, text: "A".to_string() });
+        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "A".to_string() });
         // 2. Undo
         tree.pop_undo();
         // 3. B を入力 (ここで枝分かれが発生)
-        tree.push(Action::InsertLine { lnum: 1, text: "B".to_string() });
+        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "B".to_string() });
         
         // 最新の状態は B
         assert_eq!(tree.nodes.len(), 3); // Root, A, B
@@ -105,8 +105,8 @@ mod tests {
     fn test_undo_redo_complex() {
         let mut tree = UndoTree::new();
         
-        tree.push(Action::InsertLine { lnum: 1, text: "x".to_string() });
-        tree.push(Action::InsertLine { lnum: 1, text: "y".to_string() });
+        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "x".to_string() });
+        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "y".to_string() });
         
         assert_eq!(tree.nodes.len(), 3);
         
@@ -120,7 +120,7 @@ mod tests {
         if let Action::InsertLine { text, .. } = r1 { assert_eq!(text, "x"); }
         
         // Push 'z' instead of 'y' (Branching)
-        tree.push(Action::InsertLine { lnum: 1, text: "z".to_string() });
+        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "z".to_string() });
         
         // Cannot redo 'y' anymore
         assert!(tree.pop_redo().is_none());

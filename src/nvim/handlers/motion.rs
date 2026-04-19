@@ -226,6 +226,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 },
                 Operator::ToUpper | Operator::ToLower | Operator::SwapCase => {
                     let mut b = buf.borrow_mut();
+                    b.start_undo_group();
                     let start_row = cur.row.min(target.row);
                     let end_row = cur.row.max(target.row);
                     for r in start_row..=end_row {
@@ -246,9 +247,10 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                                 }
                             }
                             let new_line: String = chars.into_iter().collect();
-                            let _ = b.set_line(r, &new_line);
+                            let _ = b.set_line(r, s_col, &new_line);
                         }
                     }
+                    b.end_undo_group();
                 },
                 Operator::Change => {
                     let m = motion.clone();
@@ -398,7 +400,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                                 }
                             }
                             let new_line: String = chars.into_iter().collect();
-                            let _ = b.set_line(r, &new_line);
+                            let _ = b.set_line(r, s_col, &new_line);
                         }
                     }
                     b.end_undo_group();
@@ -553,7 +555,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                                     }
                                 }
                                 let new_line: String = chars.into_iter().collect();
-                                let _ = b.set_line(r, &new_line);
+                                let _ = b.set_line(r, s_col, &new_line);
                             }
                         }
                         b.end_undo_group();

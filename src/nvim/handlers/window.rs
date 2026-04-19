@@ -232,7 +232,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     new_chars.extend(selected.chars());
                     new_chars.extend(chars[cur.col..].iter());
                     let new_line: String = new_chars.iter().collect();
-                    let _ = b.set_line(cur.row, &new_line);
+                    let _ = b.set_line(cur.row, 0, &new_line);
                     let new_col = start + selected.chars().count();
                     state.current_window_mut().set_cursor(cur.row, new_col);
                 }

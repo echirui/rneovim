@@ -183,7 +183,7 @@ impl VimState {
                     _ => 0,
                 };
                 if lnum > 0 {
-                    let _ = state.current_window().buffer().borrow_mut().set_line(lnum, new_line);
+                    let _ = state.current_window().buffer().borrow_mut().set_line(lnum, 0, new_line);
                 }
             }
             Ok(TypVal::Number(0))

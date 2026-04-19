@@ -220,7 +220,7 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
                 } else {
                     format!("{} {}", curr_line.trim_end(), next_line.trim_start())
                 };
-                b.set_line(cur.row, &new_line)?;
+                b.set_line(cur.row, cur.col, &new_line)?;
                 b.delete_line(cur.row + 1)?;
             }
         }
@@ -420,7 +420,7 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
                             } else {
                                 re.replace(&line, replacement).to_string()
                             };
-                            buf.borrow_mut().set_line(cur.row, &new_line)?;
+                            buf.borrow_mut().set_line(cur.row, cur.col, &new_line)?;
                             state.last_substitute = Some((pattern.to_string(), replacement.to_string(), flags.to_string()));
                         }
                     }

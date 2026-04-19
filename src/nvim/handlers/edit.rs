@@ -89,7 +89,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     let expanded_chars: Vec<char> = expanded.chars().collect();
                     chars.splice(start_char_idx..cur.col, expanded_chars);
                     let new_line: String = chars.into_iter().collect();
-                    let _ = b.set_line(cur.row, &new_line);
+                    let _ = b.set_line(cur.row, cur.col, &new_line);
                     drop(b);
                     state.current_window_mut().set_cursor(cur.row, start_char_idx + expanded.chars().count());
                 }
@@ -233,7 +233,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 b.insert_newline(cur.row, cur.col)?;
                 if let Some(line) = b.get_line(cur.row + 1) {
                     let new_line = format!("{}{}", indent, line);
-                    let _ = b.set_line(cur.row + 1, &new_line);
+                    let _ = b.set_line(cur.row + 1, 0, &new_line);
                 }
             }
             state.current_window_mut().set_cursor(cur.row + 1, indent.len());
@@ -244,8 +244,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 let mut b = buf.borrow_mut();
                 b.undo()?
             };
-            if let Some(lnum) = res {
-                state.current_window_mut().set_cursor(lnum, 0);
+            if let Some(cur) = res {
+                state.current_window_mut().set_cursor(cur.row, cur.col);
             }
         }
         Request::Redo => {
@@ -254,8 +254,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 let mut b = buf.borrow_mut();
                 b.redo()?
             };
-            if let Some(lnum) = res {
-                state.current_window_mut().set_cursor(lnum, 0);
+            if let Some(cur) = res {
+                state.current_window_mut().set_cursor(cur.row, cur.col);
             }
         }
         Request::YankLine => {
@@ -327,7 +327,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         if let Some(break_pos) = text[..tw].rfind(' ') {
                             let (first, second) = text.split_at(break_pos);
                             let second_trimmed = second.trim_start().to_string();
-                            b.set_line(current_lnum, first)?;
+                            b.set_line(current_lnum, 0, first)?;
                             b.insert_line(current_lnum + 1, &second_trimmed)?;
                             last_lnum += 1;
                         }
@@ -371,7 +371,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     };
                     *c = new_c;
                     let new_line: String = chars.into_iter().collect();
-                    let _ = b.set_line(cur.row, &new_line);
+                    let _ = b.set_line(cur.row, cur.col, &new_line);
                 }
             }
             state.current_window_mut().set_cursor(cur.row, cur.col + 1);
@@ -399,7 +399,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         let mut new_chars = chars[..start].to_vec();
                         new_chars.extend(new_num_str.chars());
                         new_chars.extend(&chars[end..]);
-                        let _ = b.set_line(cur.row, &new_chars.into_iter().collect::<String>());
+                        let _ = b.set_line(cur.row, start, &new_chars.into_iter().collect::<String>());
                         state.current_window_mut().set_cursor(cur.row, start + new_num_str.len().saturating_sub(1));
                     }
                 }
