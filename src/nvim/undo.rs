@@ -6,6 +6,7 @@ pub enum Action {
     InsertLine { lnum: usize, text: String },
     DeleteLine { lnum: usize, text: String },
     ReplaceLine { lnum: usize, old_text: String, new_text: String },
+    Group(Vec<Action>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

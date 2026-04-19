@@ -36,6 +36,8 @@ pub struct Buffer {
     modified: bool,
     /// 'readonly' flag
     readonly: bool,
+    /// Stack for collecting grouped undo actions
+    undo_group_stack: Vec<Vec<Action>>,
 }
 
 impl Buffer {
@@ -57,6 +59,27 @@ impl Buffer {
             extmark_manager: crate::nvim::extmark::ExtmarkManager::new(),
             modified: false,
             readonly: false,
+            undo_group_stack: Vec::new(),
+        }
+    }
+
+    pub fn start_undo_group(&mut self) {
+        self.undo_group_stack.push(Vec::new());
+    }
+
+    pub fn end_undo_group(&mut self) {
+        if let Some(group) = self.undo_group_stack.pop() {
+            if !group.is_empty() {
+                self.push_action(Action::Group(group));
+            }
+        }
+    }
+
+    fn push_action(&mut self, action: Action) {
+        if let Some(current_group) = self.undo_group_stack.last_mut() {
+            current_group.push(action);
+        } else {
+            self.undo_tree.push(action);
         }
     }
 
@@ -97,7 +120,7 @@ impl Buffer {
         self.memline.replace_line(lnum, text).map_err(|e| NvimError::Buffer(e.to_string()))?;
         
         // 履歴に記録
-        self.undo_tree.push(Action::ReplaceLine {
+        self.push_action(Action::ReplaceLine {
             lnum,
             old_text,
             new_text: text.to_string(),
@@ -115,7 +138,7 @@ impl Buffer {
         let lnum = self.line_count();
         
         // 履歴に記録
-        self.undo_tree.push(Action::InsertLine {
+        self.push_action(Action::InsertLine {
             lnum,
             text: text.to_string(),
         });
@@ -126,42 +149,82 @@ impl Buffer {
 
     pub fn undo(&mut self) -> Result<Option<usize>> {
         if let Some(action) = self.undo_tree.pop_undo() {
-            match action {
-                Action::InsertLine { lnum, .. } => {
-                    self.memline.delete_line(lnum).map_err(|e| NvimError::Buffer(e.to_string()))?;
-                    return Ok(Some(lnum.saturating_sub(1).max(1)));
-                }
-                Action::DeleteLine { lnum, text } => {
-                    self.memline.insert_line(lnum, &text).map_err(|e| NvimError::Buffer(e.to_string()))?;
-                    return Ok(Some(lnum));
-                }
-                Action::ReplaceLine { lnum, old_text, .. } => {
-                    self.memline.replace_line(lnum, &old_text).map_err(|e| NvimError::Buffer(e.to_string()))?;
-                    return Ok(Some(lnum));
-                }
-            }
+            return self.apply_undo_action(action);
         }
         Ok(None)
     }
 
-    pub fn redo(&mut self) -> Result<Option<usize>> {
-        if let Some(action) = self.undo_tree.pop_redo() {
-            match action {
-                Action::InsertLine { lnum, text } => {
-                    self.memline.insert_line(lnum, &text).map_err(|e| NvimError::Buffer(e.to_string()))?;
-                    return Ok(Some(lnum));
+    fn apply_undo_action(&mut self, action: Action) -> Result<Option<usize>> {
+        match action {
+            Action::InsertLine { lnum, .. } => {
+                self.memline.delete_line(lnum).map_err(|e| NvimError::Buffer(e.to_string()))?;
+                Ok(Some(lnum.saturating_sub(1).max(1)))
+            }
+            Action::DeleteLine { lnum, text } => {
+                self.memline.insert_line(lnum, &text).map_err(|e| NvimError::Buffer(e.to_string()))?;
+                Ok(Some(lnum))
+            }
+            Action::ReplaceLine { lnum, old_text, .. } => {
+                self.memline.replace_line(lnum, &old_text).map_err(|e| NvimError::Buffer(e.to_string()))?;
+                Ok(Some(lnum))
+            }
+            Action::Group(actions) => {
+                let mut last_pos = None;
+                for action in actions.into_iter().rev() {
+                    last_pos = self.apply_undo_action(action)?;
                 }
-                Action::DeleteLine { lnum, .. } => {
-                    self.memline.delete_line(lnum).map_err(|e| NvimError::Buffer(e.to_string()))?;
-                    return Ok(Some(lnum.saturating_sub(1).max(1)));
-                }
-                Action::ReplaceLine { lnum, new_text, .. } => {
-                    self.memline.replace_line(lnum, &new_text).map_err(|e| NvimError::Buffer(e.to_string()))?;
-                    return Ok(Some(lnum));
-                }
+                Ok(last_pos)
             }
         }
+    }
+
+    pub fn redo(&mut self) -> Result<Option<usize>> {
+        if let Some(action) = self.undo_tree.pop_redo() {
+            return self.apply_redo_action(action);
+        }
         Ok(None)
+    }
+
+    fn apply_redo_action(&mut self, action: Action) -> Result<Option<usize>> {
+        match action {
+            Action::InsertLine { lnum, text } => {
+                self.memline.insert_line(lnum, &text).map_err(|e| NvimError::Buffer(e.to_string()))?;
+                Ok(Some(lnum))
+            }
+            Action::DeleteLine { lnum, .. } => {
+                self.memline.delete_line(lnum).map_err(|e| NvimError::Buffer(e.to_string()))?;
+                Ok(Some(lnum.saturating_sub(1).max(1)))
+            }
+            Action::ReplaceLine { lnum, new_text, .. } => {
+                self.memline.replace_line(lnum, &new_text).map_err(|e| NvimError::Buffer(e.to_string()))?;
+                Ok(Some(lnum))
+            }
+            Action::Group(actions) => {
+                let mut last_pos = None;
+                for action in actions {
+                    last_pos = self.apply_redo_action(action)?;
+                }
+                Ok(last_pos)
+            }
+        }
+    }
+
+    pub fn indent_line(&mut self, lnum: usize, forward: bool, tabstop: usize) -> Result<()> {
+        if let Some(line) = self.get_line(lnum) {
+            let mut new_line = line.to_string();
+            if forward {
+                let spaces = " ".repeat(tabstop);
+                new_line.insert_str(0, &spaces);
+            } else {
+                let mut count = 0;
+                while count < tabstop && new_line.starts_with(' ') {
+                    new_line.remove(0);
+                    count += 1;
+                }
+            }
+            self.set_line(lnum, &new_line)?;
+        }
+        Ok(())
     }
 
     pub fn insert_char(&mut self, lnum: usize, col: usize, c: char) -> Result<()> {
@@ -265,7 +328,7 @@ impl Buffer {
         self.extmark_manager.on_change(lnum, 0, 1, 0);
 
         // 履歴記録（簡易的にInsertLineとして）
-        self.undo_tree.push(Action::InsertLine {
+        self.push_action(Action::InsertLine {
             lnum,
             text: text.to_string(),
         });
@@ -286,7 +349,7 @@ impl Buffer {
         self.extmark_manager.on_change(lnum, 0, -1, 0);
 
         // 履歴に記録
-        self.undo_tree.push(Action::DeleteLine { lnum, text });
+        self.push_action(Action::DeleteLine { lnum, text });
 
         self.modified = true;
         Ok(())

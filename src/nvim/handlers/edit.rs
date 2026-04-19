@@ -345,20 +345,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Some(crate::nvim::state::OptionValue::Int(n)) => *n as usize,
                 _ => 8,
             };
-            if let Some(line) = b.get_line(cur.row) {
-                let mut new_line = line.to_string();
-                if forward {
-                    let spaces = " ".repeat(tabstop);
-                    new_line.insert_str(0, &spaces);
-                } else {
-                    let mut count = 0;
-                    while count < tabstop && new_line.starts_with(' ') {
-                        new_line.remove(0);
-                        count += 1;
-                    }
-                }
-                b.set_line(cur.row, &new_line)?;
-            }
+            b.indent_line(cur.row, forward, tabstop)?;
         }
         Request::DeleteCurrentLine => {
             handle_request(state, Request::DeleteLine)?;

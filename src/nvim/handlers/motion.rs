@@ -124,10 +124,18 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Motion::NextChange => {
                     let mut b = buf.borrow_mut();
                     if let Some(action) = b.undo_tree.pop_redo() {
-                        let lnum = match action {
-                            crate::nvim::undo::Action::InsertLine { lnum, .. } => lnum,
-                            crate::nvim::undo::Action::DeleteLine { lnum, .. } => lnum,
-                            crate::nvim::undo::Action::ReplaceLine { lnum, .. } => lnum,
+                        let lnum = match &action {
+                            crate::nvim::undo::Action::InsertLine { lnum, .. } => *lnum,
+                            crate::nvim::undo::Action::DeleteLine { lnum, .. } => *lnum,
+                            crate::nvim::undo::Action::ReplaceLine { lnum, .. } => *lnum,
+                            crate::nvim::undo::Action::Group(actions) => {
+                                match actions.first() {
+                                    Some(crate::nvim::undo::Action::InsertLine { lnum, .. }) => *lnum,
+                                    Some(crate::nvim::undo::Action::DeleteLine { lnum, .. }) => *lnum,
+                                    Some(crate::nvim::undo::Action::ReplaceLine { lnum, .. }) => *lnum,
+                                    _ => 1,
+                                }
+                            }
                         };
                         Cursor { row: lnum, col: 0 }
                     } else { cur }
@@ -135,10 +143,18 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Motion::PrevChange => {
                     let mut b = buf.borrow_mut();
                     if let Some(action) = b.undo_tree.pop_undo() {
-                        let lnum = match action {
-                            crate::nvim::undo::Action::InsertLine { lnum, .. } => lnum,
-                            crate::nvim::undo::Action::DeleteLine { lnum, .. } => lnum,
-                            crate::nvim::undo::Action::ReplaceLine { lnum, .. } => lnum,
+                        let lnum = match &action {
+                            crate::nvim::undo::Action::InsertLine { lnum, .. } => *lnum,
+                            crate::nvim::undo::Action::DeleteLine { lnum, .. } => *lnum,
+                            crate::nvim::undo::Action::ReplaceLine { lnum, .. } => *lnum,
+                            crate::nvim::undo::Action::Group(actions) => {
+                                match actions.first() {
+                                    Some(crate::nvim::undo::Action::InsertLine { lnum, .. }) => *lnum,
+                                    Some(crate::nvim::undo::Action::DeleteLine { lnum, .. }) => *lnum,
+                                    Some(crate::nvim::undo::Action::ReplaceLine { lnum, .. }) => *lnum,
+                                    _ => 1,
+                                }
+                            }
                         };
                         Cursor { row: lnum, col: 0 }
                     } else { cur }
@@ -264,6 +280,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Operator::Delete => {
                     {
                         let mut b = buf.borrow_mut();
+                        b.start_undo_group();
                         if start.row == end.row {
                             let count = end.col - start.col + 1;
                             for _ in 0..count {
@@ -276,6 +293,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                                 b.delete_line(start_row)?;
                             }
                         }
+                        b.end_undo_group();
                     }
                     state.current_window_mut().set_cursor(start.row.min(buf.borrow().line_count()), 0);
                 },
@@ -304,6 +322,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 },
                 Operator::ToUpper | Operator::ToLower | Operator::SwapCase => {
                     let mut b = buf.borrow_mut();
+                    b.start_undo_group();
                     for r in start.row..=end.row {
                         if let Some(line) = b.get_line(r) {
                             let mut chars: Vec<char> = line.chars().collect();
@@ -324,6 +343,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                             let _ = b.set_line(r, &new_line);
                         }
                     }
+                    b.end_undo_group();
                 },
                 Operator::Change => {
                     handle_request(state, Request::OpVisualSelection(Operator::Delete))?;
@@ -332,9 +352,17 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 },
                 Operator::Indent | Operator::Outdent => {
                     let forward = matches!(op, Operator::Indent);
-                    for r in start.row..=end.row {
-                        state.current_window_mut().set_cursor(r, 0);
-                        handle_request(state, Request::Indent { forward })?;
+                    let tabstop = match state.options.get("tabstop") {
+                        Some(crate::nvim::state::OptionValue::Int(n)) => *n as usize,
+                        _ => 8,
+                    };
+                    {
+                        let mut b = buf.borrow_mut();
+                        b.start_undo_group();
+                        for r in start.row..=end.row {
+                            b.indent_line(r, forward, tabstop)?;
+                        }
+                        b.end_undo_group();
                     }
                     state.current_window_mut().set_cursor(start.row, 0);
                 }
