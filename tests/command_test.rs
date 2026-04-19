@@ -49,19 +49,13 @@ fn test_editing_integration() {
     // ESC (Normal mode)
     handle_request(&mut state, Request::SetMode(Mode::Normal)).unwrap();
 
-    // u (Undo once) -> "Rus"
+    // u (Undo once) -> entire "Rust" is undone because it was one session
     handle_request(&mut state, Request::Undo).unwrap();
     {
         let buf = state.current_window().buffer();
-        assert_eq!(buf.borrow().get_line(1), Some("Rus"));
-    }
-
-    // u (Undo until empty)
-    handle_request(&mut state, Request::Undo).unwrap();
-    handle_request(&mut state, Request::Undo).unwrap();
-    handle_request(&mut state, Request::Undo).unwrap();
-    {
-        let buf = state.current_window().buffer();
+        // The buffer was empty before 'iRust<Esc>', so it should be empty now.
+        // Actually, a new buffer might have an empty line or be completely empty.
+        // In our implementation, undoing the first InsertLine might result in 0 lines.
         assert_eq!(buf.borrow().line_count(), 0);
     }
 }
