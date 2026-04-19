@@ -1,74 +1,98 @@
 use std::process::Command;
 use std::fs;
-use rneovim::nvim::state::VimState;
-use rneovim::nvim::api::handle_request;
-use rneovim::nvim::request::Request;
 
-/// 本家 Neovim を使って期待される結果を生成する
-fn run_real_nvim(keys: &str, filename: &str) -> String {
-    let temp_file = "real_nvim_result.txt";
-    // nvim --headless -c "normal <keys>" -c "wq" filename
-    // 注意: <keys> に特殊文字が含まれる場合はエスケープが必要です
-    let status = Command::new("nvim")
-        .arg("--headless")
-        .arg("-u")
-        .arg("NONE") // 設定を読み込まない
-        .arg("-c")
-        .arg(format!("normal {}", keys))
-        .arg("-c")
-        .arg(format!("w! {}", temp_file))
-        .arg("-c")
-        .arg("qa!")
-        .arg(filename)
+/// Run a comparison between rneovim and nvim
+fn assert_nvim_compat(initial_content: &str, keys: &str, test_name: &str) {
+    let filename = format!("temp_test_{}.txt", test_name);
+    let actual_file = format!("actual_{}.txt", test_name);
+    let expected_file = format!("expected_{}.txt", test_name);
+
+    // Initial setup
+    fs::write(&filename, initial_content).expect("Failed to write initial file");
+
+    // 1. Run rneovim
+    let rneovim_status = Command::new("cargo")
+        .args(&["run", "--release", "--", &filename, "--test-keys", keys, "--test-output", &actual_file])
         .status()
-        .expect("Failed to run real nvim");
+        .expect("Failed to run rneovim");
+    assert!(rneovim_status.success(), "rneovim failed for test: {}", test_name);
 
-    assert!(status.success());
-    let result = fs::read_to_string(temp_file).expect("Failed to read nvim output");
-    let _ = fs::remove_file(temp_file);
-    result
-}
-
-/// rneovim (VimState) を使って結果を生成する
-/// 簡易的なキー入力を Request に変換して実行する
-fn run_rneovim_simulated(keys: &str, filename: &str) -> String {
-    let mut state = VimState::new();
+    // 2. Run nvim (headless)
+    // We use a temporary binary file to feed keys via -s
+    // But we need to make sure nvim doesn't quit too early.
+    // A better way for these simple tests is to use -c "normal! ..."
+    // For ESC and other special chars, we can use :exe "normal! ..." with \<Esc>
     
-    // ファイルを開く
-    if fs::metadata(filename).is_ok() {
-        let _ = handle_request(&mut state, Request::OpenFile(filename.to_string()));
+    let processed_keys_for_nvim = keys
+        .replace("\\x1b", "\\<Esc>")
+        .replace("\\x16", "\\<C-v>")
+        .replace("\\x04", "\\<C-d>")
+        .replace("\\x15", "\\<C-u>");
+
+    let nvim_status = Command::new("nvim")
+        .args(&[
+            "--headless", "-u", "NONE", "-i", "NONE",
+            "-c", &format!("edit {}", filename),
+            "-c", &format!("execute \"normal! {}\"", processed_keys_for_nvim),
+            "-c", &format!("w! {}", expected_file),
+            "-c", "qa!",
+        ])
+        .status()
+        .expect("Failed to run nvim");
+    assert!(nvim_status.success(), "nvim failed for test: {}", test_name);
+
+    // 3. Compare results
+    let actual = fs::read_to_string(&actual_file).expect("Failed to read actual output");
+    let expected = fs::read_to_string(&expected_file).expect("Failed to read expected output");
+
+    if actual != expected {
+        println!("FAILURE in test: {}", test_name);
+        println!("Initial content: {:?}", initial_content);
+        println!("Keys (raw): {:?}", keys);
+        println!("Keys (nvim): {:?}", processed_keys_for_nvim);
+        println!("--- ACTUAL ---");
+        println!("{}", actual);
+        println!("--- EXPECTED ---");
+        println!("{}", expected);
+        
+        // Clean up before panicking
+        let _ = fs::remove_file(&filename);
+        let _ = fs::remove_file(&actual_file);
+        let _ = fs::remove_file(&expected_file);
+        
+        panic!("Results differ between rneovim and nvim");
     }
 
-    // TODO: ここで keys (文字列) を解析して Request に変換するロジックが必要
-    // 現時点では、簡単な文字列挿入などのテスト用に手動でリクエストを送る形にするか、
-    // キープロセッサをテスト環境で回す必要があります。
-    
-    // テスト用にバッファの内容を文字列として返す
-    let buf = state.current_window().buffer();
-    let b = buf.borrow();
-    let mut result = String::new();
-    for i in 1..=b.line_count() {
-        if let Some(line) = b.get_line(i) {
-            result.push_str(line);
-            result.push('\n');
-        }
-    }
-    result
+    // Clean up
+    let _ = fs::remove_file(&filename);
+    let _ = fs::remove_file(&actual_file);
+    let _ = fs::remove_file(&expected_file);
 }
 
 #[test]
-#[ignore] // nvim がインストールされている環境でのみ実行
-fn test_compat_simple_insert() {
-    let filename = "test_input.py";
-    fs::write(filename, "print('hello')\n").unwrap();
-    
-    let keys = "ggO# header\x1B"; // 行頭に移動して上に一行挿入
-    
-    let expected = run_real_nvim("ggO# header", filename);
-    // rneovim 側でも同じことを行う（現在はシミュレーションが必要）
-    // let actual = run_rneovim_simulated(keys, filename);
-    
-    // assert_eq!(actual, expected);
-    
-    fs::remove_file(filename).unwrap();
+fn test_dw_simple() {
+    assert_nvim_compat("print('hello world')\n", "dw", "dw_simple");
+}
+
+#[test]
+fn test_dw_multiline() {
+    assert_nvim_compat("abc\ndef\n", "dw", "dw_multiline");
+}
+
+#[test]
+fn test_ciw_undo_x() {
+    // ciw, ESC, u, x
+    assert_nvim_compat("print('hello world')\n", "ciw\\x1bux", "ciw_undo_x");
+}
+
+#[test]
+fn test_block_insert() {
+    // Ctrl-v (\x16), G, I, #, ESC (\x1b)
+    assert_nvim_compat("line1\nline2\nline3\n", "\\x16GI#\\x1b", "block_insert");
+}
+
+#[test]
+fn test_cw_special() {
+    // cw on a word should not delete the following space
+    assert_nvim_compat("import request\n", "cw\\x1b", "cw_special");
 }
