@@ -170,6 +170,7 @@ pub enum Request {
     RepeatLastChange { count: u32 },
     BlockInsert { append: bool },
     LspDefinition,
+    LspHover,
     SplitWindow { vertical: bool },
     NewTabPage,
     NextWindow,

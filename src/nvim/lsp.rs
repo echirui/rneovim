@@ -94,6 +94,38 @@ impl LspClient {
                                         }
                                     }
 
+                                    // Handle 'textDocument/hover' response (id: 101)
+                                    if j.get("id").and_then(|id| id.as_i64()) == Some(101) {
+                                        if let Some(result) = j.get("result") {
+                                            let mut contents = String::new();
+                                            if let Some(val) = result.get("contents") {
+                                                if let Some(s) = val.as_str() {
+                                                    contents = s.to_string();
+                                                } else if let Some(obj) = val.as_object() {
+                                                    if let Some(value) = obj.get("value").and_then(|v| v.as_str()) {
+                                                        contents = value.to_string();
+                                                    }
+                                                } else if let Some(arr) = val.as_array() {
+                                                    for item in arr {
+                                                        if let Some(s) = item.as_str() {
+                                                            contents.push_str(s);
+                                                            contents.push('\n');
+                                                        } else if let Some(value) = item.get("value").and_then(|v| v.as_str()) {
+                                                            contents.push_str(value);
+                                                            contents.push('\n');
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            
+                                            if !contents.is_empty() {
+                                                let _ = event_sender.send(Box::new(move |state| {
+                                                    state.set_cmdline(contents);
+                                                }));
+                                            }
+                                        }
+                                    }
+
                                     let _ = event_sender.send(Box::new(move |state| {
                                         if let Some(method) = j.get("method").and_then(|v| v.as_str()) {
                                             if method == "textDocument/publishDiagnostics" {
@@ -183,6 +215,24 @@ impl LspClient {
             "jsonrpc": "2.0",
             "id": id,
             "method": "textDocument/definition",
+            "params": {
+                "textDocument": {
+                    "uri": uri
+                },
+                "position": {
+                    "line": line, // 0-indexed
+                    "character": column
+                }
+            }
+        });
+        let _ = self.tx.send(msg);
+    }
+
+    pub fn send_hover(&self, id: i64, uri: &str, line: usize, column: usize) {
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/hover",
             "params": {
                 "textDocument": {
                     "uri": uri

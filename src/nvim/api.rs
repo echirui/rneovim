@@ -52,23 +52,37 @@ handlers::motion::handle(state, req.clone())?;
 handlers::window::handle(state, req.clone())?;
 handlers::cmdline::handle(state, req.clone())?;
 
-match req {
-    Request::LspDefinition => {
-        if let Some(lsp) = &state.lsp_client {
-            let win = state.current_window();
-            let cur = win.cursor();
-            let buf = win.buffer();
-            let path_opt = buf.borrow().name().map(|n| n.to_string());
-            if let Some(path) = path_opt {
-                let uri = format!("file://{}", path);
-                lsp.send_definition(100, &uri, cur.row - 1, cur.col);
+    match req {
+        Request::LspDefinition => {
+            if let Some(lsp) = &state.lsp_client {
+                let win = state.current_window();
+                let cur = win.cursor();
+                let buf = win.buffer();
+                let path_opt = buf.borrow().name().map(|n| n.to_string());
+                if let Some(path) = path_opt {
+                    let uri = format!("file://{}", path);
+                    lsp.send_definition(100, &uri, cur.row - 1, cur.col);
+                }
             }
         }
-    }    _ => {}
-}
+        Request::LspHover => {
+            if let Some(lsp) = &state.lsp_client {
+                let win = state.current_window();
+                let cur = win.cursor();
+                let buf = win.buffer();
+                let path_opt = buf.borrow().name().map(|n| n.to_string());
+                if let Some(path) = path_opt {
+                    let uri = format!("file://{}", path);
+                    lsp.send_hover(101, &uri, cur.row - 1, cur.col);
+                }
+            }
+        }
+        _ => {}
+    }
 
-// LSP同期
-if state.lsp_client.is_some() {        for buf in &state.buffers {
+    // LSP同期
+    if state.lsp_client.is_some() {
+        for buf in &state.buffers {
             let mut b = buf.borrow_mut();
             if let Some(path) = b.name().map(|n| n.to_string()) {
                 if !b.is_lsp_opened {

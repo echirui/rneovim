@@ -249,6 +249,7 @@ impl KeyProcessor {
             (None, None, 'H') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WindowTop, count }),
             (None, None, 'M') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WindowMiddle, count }),
             (None, None, 'L') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WindowBottom, count }),
+            (None, None, 'K') => Some(Request::LspHover),
             (None, None, 'p') => Some(Request::Paste),
             (None, None, 'P') => Some(Request::PasteBefore),
             (None, None, 'x') => Some(Request::DeleteCharAtCursor { count }),
