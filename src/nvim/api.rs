@@ -33,6 +33,32 @@ pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
     handlers::window::handle(state, req.clone())?;
     handlers::cmdline::handle(state, req)?;
     
+    // LSP同期
+    if state.lsp_client.is_some() {
+        for buf in &state.buffers {
+            let mut b = buf.borrow_mut();
+            if let Some(path) = b.name().map(|n| n.to_string()) {
+                if !b.is_lsp_opened {
+                    let text = b.get_all_lines().join("\n");
+                    let uri = format!("file://{}", path);
+                    let lang = if path.ends_with(".py") { "python" } else if path.ends_with(".rs") { "rust" } else { "text" };
+                    if let Some(lsp) = &state.lsp_client {
+                        lsp.send_did_open(&uri, lang, &text);
+                    }
+                    b.is_lsp_opened = true;
+                    b.lsp_synced_version = b.version;
+                } else if b.version > b.lsp_synced_version {
+                    let text = b.get_all_lines().join("\n");
+                    let uri = format!("file://{}", path);
+                    if let Some(lsp) = &state.lsp_client {
+                        lsp.send_did_change(&uri, b.version, &text);
+                    }
+                    b.lsp_synced_version = b.version;
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -644,7 +670,9 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
         "lspstart" => {
             let cmd_args = parts[1..].join(" ");
             if let Ok(client) = crate::nvim::lsp::LspClient::new(&cmd_args, state.sender.clone()) {
-                client.send_initialize();
+                let cwd = std::env::current_dir().unwrap_or_default().display().to_string();
+                let uri = format!("file://{}", cwd);
+                client.send_initialize(&uri);
                 state.lsp_client = Some(client);
             }
         }

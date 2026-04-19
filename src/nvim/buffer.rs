@@ -40,6 +40,12 @@ pub struct Buffer {
     undo_group_stack: Vec<Vec<Action>>,
     /// Whether to record undo actions
     pub undo_enabled: bool,
+    /// Buffer content version (incremented on change)
+    pub version: u64,
+    /// Version last synced to LSP
+    pub lsp_synced_version: u64,
+    /// Whether didOpen has been sent for this buffer
+    pub is_lsp_opened: bool,
 }
 
 impl Buffer {
@@ -63,6 +69,9 @@ impl Buffer {
             readonly: false,
             undo_group_stack: Vec::new(),
             undo_enabled: true,
+            version: 1,
+            lsp_synced_version: 0,
+            is_lsp_opened: false,
         }
     }
 
@@ -139,6 +148,7 @@ impl Buffer {
         });
 
         self.modified = true;
+        self.version += 1;
         Ok(())
     }
 
@@ -157,6 +167,7 @@ impl Buffer {
         });
 
         self.modified = true;
+        self.version += 1;
         Ok(())
     }
 
@@ -193,7 +204,10 @@ impl Buffer {
 
     pub fn redo(&mut self) -> Result<Option<Cursor>> {
         if let Some(action) = self.undo_tree.pop_redo() {
-            return self.apply_redo_action(action);
+            let res = self.apply_redo_action(action);
+            self.modified = true;
+            self.version += 1;
+            return res;
         }
         Ok(None)
     }
@@ -328,6 +342,7 @@ impl Buffer {
         self.set_line(lnum, col, &first_str)?;
         self.memline.insert_line(lnum + 1, &second_str).map_err(|e| NvimError::Buffer(e.to_string()))?;
         self.modified = true;
+        self.version += 1;
         Ok(())
     }
 
@@ -348,6 +363,7 @@ impl Buffer {
         });
         
         self.modified = true;
+        self.version += 1;
         Ok(())
     }
 
@@ -366,6 +382,7 @@ impl Buffer {
         self.push_action(Action::DeleteLine { lnum, col: 0, text });
 
         self.modified = true;
+        self.version += 1;
         Ok(())
     }
 

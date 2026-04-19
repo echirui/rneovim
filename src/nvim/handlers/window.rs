@@ -346,7 +346,9 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         Request::LspStart(cmd) => {
             let sender = state.sender.clone();
             if let Ok(client) = crate::nvim::lsp::LspClient::new(&cmd, sender) {
-                client.send_initialize();
+                let cwd = std::env::current_dir().unwrap_or_default().display().to_string();
+                let uri = format!("file://{}", cwd);
+                client.send_initialize(&uri);
                 state.lsp_client = Some(client);
             }
         }
