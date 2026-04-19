@@ -120,6 +120,24 @@ fn test_excessive_undo() {
 }
 
 #[test]
+fn test_search_open_undo() {
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // /print<CR>oprint<ESC>u
+    // \x0d is <CR>, \x1b is <Esc>
+    assert_nvim_compat(&content, "/print\\x0doprint\\x1bu", "search_open_undo");
+}
+
+#[test]
+fn test_insert_undo_simple() {
+    assert_nvim_compat("hello\n", "i123\\x1bu", "insert_undo_simple");
+}
+
+#[test]
+fn test_change_undo_simple() {
+    assert_nvim_compat("hello world\n", "cw123\\x1bu", "change_undo_simple");
+}
+
+#[test]
 fn test_sample_file_edit() {
     let content = "import requests
 

@@ -449,6 +449,18 @@ impl VimState {
         if matches!(self.mode, Mode::Insert | Mode::InsertLiteral | Mode::InsertDigraph1(_)) && !matches!(mode, Mode::Insert | Mode::InsertLiteral | Mode::InsertDigraph1(_)) {
             self.last_insert_cursor = Some(self.current_window().cursor());
         }
+
+        // アンドゥグループの管理
+        let is_insert_like = |m: &Mode| matches!(m, Mode::Insert | Mode::Replace | Mode::VirtualReplace | Mode::BlockInsert {..} | Mode::InsertOnce | Mode::InsertLiteral | Mode::InsertDigraph1(_));
+        let new_is_insert = is_insert_like(&mode);
+        let old_is_insert = is_insert_like(&self.mode);
+
+        if new_is_insert && !old_is_insert {
+            self.current_window().buffer().borrow_mut().start_undo_group();
+        } else if old_is_insert && !new_is_insert {
+            self.current_window().buffer().borrow_mut().end_undo_group();
+        }
+
         self.mode = mode;
         if matches!(self.mode, Mode::Normal) {
             self.pending_key = None;

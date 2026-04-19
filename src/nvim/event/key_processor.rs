@@ -51,7 +51,7 @@ impl KeyProcessor {
             Mode::BlockInsert { .. } => {
                 if key == '\x1B' {
                     state.set_mode(Mode::Normal);
-                    Some(Request::EndUndoGroup)
+                    None
                 } else {
                     Some(Request::InsertChar(key))
                 }

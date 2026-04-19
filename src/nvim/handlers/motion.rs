@@ -371,8 +371,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                             }
                         }
                     }
-                    handle_request(state, Request::OpMotion { op: Operator::Delete, motion: m })?;
                     state.set_mode(Mode::Insert);
+                    handle_request(state, Request::OpMotion { op: Operator::Delete, motion: m })?;
                 },
                 Operator::Indent | Operator::Outdent => {
                     let start_row = cur.row.min(target.row);
@@ -523,8 +523,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     b.end_undo_group();
                 },
                 Operator::Change => {
-                    handle_request(state, Request::OpVisualSelection(Operator::Delete))?;
                     state.set_mode(Mode::Insert);
+                    handle_request(state, Request::OpVisualSelection(Operator::Delete))?;
                     return Ok(());
                 },
                 Operator::Indent | Operator::Outdent => {
@@ -679,8 +679,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     },
                     Operator::Change => {
                         let o = obj.clone();
-                        handle_request(state, Request::OpTextObject { op: Operator::Delete, inner, obj: o })?;
                         state.set_mode(Mode::Insert);
+                        handle_request(state, Request::OpTextObject { op: Operator::Delete, inner, obj: o })?;
                     }
                     Operator::None => {
                         state.visual_anchor = Some(start);

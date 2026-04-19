@@ -41,8 +41,6 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 let cur = state.current_window().cursor();
                 let anchor = state.visual_anchor.unwrap_or(cur);
                 state.set_mode(Mode::BlockInsert { append, anchor, cursor: cur });
-                let buf = state.current_window().buffer();
-                buf.borrow_mut().start_undo_group();
             }
         }
         Request::InsertChar(c) => {
@@ -178,12 +176,12 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 }
             }
 
+            state.set_mode(Mode::Insert);
             {
                 let mut b = buf.borrow_mut();
                 b.insert_line(new_lnum, &indent)?;
             }
             state.current_window_mut().set_cursor(new_lnum, indent.chars().count());
-            state.set_mode(Mode::Insert);
         }
         Request::Backspace => {
             if let Mode::BlockInsert { append, anchor, cursor } = state.mode {
