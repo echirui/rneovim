@@ -1,0 +1,50 @@
+#include <stdint.h>
+#include <termios.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <sys/ioctl.h>
+
+// Neovimの xpopcount と同等のロジック
+unsigned xpopcount_test(uint64_t x) {
+    unsigned count = 0;
+    for (; x != 0; x >>= 1) {
+        if (x & 1) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static struct termios orig_termios;
+
+void os_setup_terminal() {
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void os_restore_terminal() {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+}
+
+int os_read_char() {
+    char c;
+    if (read(STDIN_FILENO, &c, 1) == 1) {
+        return c;
+    }
+    return -1;
+}
+
+void os_get_terminal_size(int *width, int *height) {
+    struct winsize w;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) != -1) {
+        *width = w.ws_col;
+        *height = w.ws_row;
+    } else {
+        *width = 80;
+        *height = 24;
+    }
+}

@@ -1,0 +1,177 @@
+use std::time::Duration;
+use rneovim::nvim::state::{VimState, Mode};
+use rneovim::nvim::event::event_loop::EventLoop;
+use rneovim::nvim::event::key_processor::KeyProcessor;
+use rneovim::nvim::api::handle_request;
+use rneovim::nvim::request::{Request, MouseButton, MouseAction};
+
+use std::sync::mpsc;
+
+extern "C" {
+    fn os_setup_terminal();
+    fn os_restore_terminal();
+    fn os_read_char() -> std::ffi::c_int;
+    fn os_get_terminal_size(width: *mut std::ffi::c_int, height: *mut std::ffi::c_int);
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let mut state = VimState::new();
+    let mut eloop = EventLoop::new();
+    let processor = KeyProcessor::new();
+
+    let (sender, _receiver) = mpsc::channel();
+    state.sender = Some(sender.clone());
+
+    unsafe { os_setup_terminal() };
+    print!("\x1B[2J\x1B[H\x1B[?25l\x1B[?1000h\x1B[?1006h");
+
+    let sender_clone = sender.clone();
+    let _sig_thread = std::thread::spawn(move || {
+        let mut signals = signal_hook::iterator::Signals::new(&[
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+            signal_hook::consts::SIGWINCH,
+        ]).unwrap();
+
+        for signal in signals.forever() {
+            match signal {
+                signal_hook::consts::SIGINT => {
+                    let _ = sender_clone.send(Box::new(|state| {
+                        state.set_cmdline("Interrupted!".to_string());
+                        let _ = handle_request(state, Request::Redraw);
+                    }));
+                }
+                signal_hook::consts::SIGTERM | signal_hook::consts::SIGHUP => {
+                    let _ = sender_clone.send(Box::new(|state| { state.quit(); }));
+                }
+                signal_hook::consts::SIGWINCH => {
+                    let _ = sender_clone.send(Box::new(|state| {
+                        let mut w: std::ffi::c_int = 0; let mut h: std::ffi::c_int = 0;
+                        unsafe { os_get_terminal_size(&mut w, &mut h) };
+                        state.grid.resize(w as usize, h as usize);
+                        let _ = handle_request(state, Request::Resize { width: w as usize, height: h as usize });
+                        state.redraw();
+                    }));
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let mut term_w: std::ffi::c_int = 0; let mut term_h: std::ffi::c_int = 0;
+    unsafe { os_get_terminal_size(&mut term_w, &mut term_h) };
+    if term_w > 0 && term_h > 0 {
+        state.grid.resize(term_w as usize, term_h as usize);
+        let win = state.current_window_mut();
+        win.set_width(term_w as usize);
+        win.set_height((term_h as usize).saturating_sub(2));
+    }
+    let _ = rneovim::load_config(&mut state, ".rneovimrc");
+    if args.len() > 1 {
+        let _ = handle_request(&mut state, Request::OpenFile(args[1].clone()));
+    }
+    let _ = handle_request(&mut state, Request::Redraw);
+
+    while !state.should_quit() {
+        let c = unsafe { os_read_char() };
+        if c != -1 {
+            let key = c as u8 as char;
+            let mut special_req = None;
+
+            if key == '\x1B' {
+                // Escape sequence parser
+                let c2 = unsafe { os_read_char() };
+                if c2 == '[' as i32 {
+                    let mut buf = String::new();
+                    loop {
+                        let nc = unsafe { os_read_char() };
+                        if nc == -1 { break; }
+                        let nch = nc as u8 as char;
+                        buf.push(nch);
+                        if (nch >= 'a' && nch <= 'z') || (nch >= 'A' && nch <= 'Z') || nch == '~' { break; }
+                    }
+                    if buf.starts_with('<') {
+                        // SGR mouse mode: \x1B[<Pb;Px;Py;m or M
+                        let is_release = buf.ends_with('m');
+                        let parts: Vec<&str> = buf[1..buf.len()-1].split(';').collect();
+                        if parts.len() == 3 {
+                            let pb = parts[0].parse::<i32>().unwrap_or(0);
+                            let px = parts[1].parse::<usize>().unwrap_or(0);
+                            let py = parts[2].parse::<usize>().unwrap_or(0);
+                            let button = match pb & 0x43 {
+                                0 => MouseButton::Left, 1 => MouseButton::Middle, 2 => MouseButton::Right,
+                                64 => MouseButton::WheelUp, 65 => MouseButton::WheelDown, _ => MouseButton::None,
+                            };
+                            let action = if pb & 0x20 != 0 { MouseAction::Drag } else if is_release { MouseAction::Release } else { MouseAction::Press };
+                            special_req = Some(Request::MouseEvent { button, action, row: py, col: px });
+                        }
+                    } else {
+                        // Arrow keys and others
+                        special_req = match buf.as_str() {
+                            "A" => { // Up
+                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
+                                    Some(Request::CmdLineHistory { forward: false })
+                                } else {
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Up })
+                                }
+                            }
+                            "B" => { // Down
+                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
+                                    Some(Request::CmdLineHistory { forward: true })
+                                } else {
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Down })
+                                }
+                            }
+                            "C" => { // Right
+                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
+                                    Some(Request::CmdLineMoveCursor { offset: 1 })
+                                } else {
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Right })
+                                }
+                            }
+                            "D" => { // Left
+                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
+                                    Some(Request::CmdLineMoveCursor { offset: -1 })
+                                } else {
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Left })
+                                }
+                            }
+                            "H" | "1~" => { // Home
+                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
+                                    Some(Request::CmdLineMoveCursorTo { pos: 0 })
+                                } else { None }
+                            }
+                            "F" | "4~" => { // End
+                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
+                                    Some(Request::CmdLineMoveCursorTo { pos: 9999 })
+                                } else { None }
+                            }
+                            _ => None,
+                        };
+                    }
+                }
+            }
+
+            let req = if let Some(sr) = special_req {
+                Some(sr)
+            } else {
+                processor.process_key(&mut state, key)
+            };
+
+            if let Some(r) = req {
+                let _ = handle_request(&mut state, r);
+                state.pending_register = None;
+            }
+            let _ = handle_request(&mut state, Request::Redraw);
+        }
+        eloop.poll_events(&mut state, Some(Duration::from_millis(10)));
+    }
+    unsafe { 
+        print!("\x1B[?1006l\x1B[?1000l");
+        os_restore_terminal() 
+    };
+    print!("\x1B[?25h\x1B[2J\x1B[H");
+    println!("Exited rneovim.");
+}
