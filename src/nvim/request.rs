@@ -68,6 +68,17 @@ impl Motion {
             _ => false,
         }
     }
+
+    pub fn is_linewise(&self) -> bool {
+        match self {
+            Motion::Up | Motion::Down |
+            Motion::BufferStart | Motion::BufferEnd |
+            Motion::WindowTop | Motion::WindowMiddle | Motion::WindowBottom |
+            Motion::SectionForward | Motion::SectionBackward |
+            Motion::ParagraphForward | Motion::ParagraphBackward => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

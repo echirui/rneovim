@@ -15,7 +15,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             let cur = win.cursor();
             let buf = win.buffer();
             
-            let target = match motion {
+            let mut target = match motion {
                 Motion::Left => Cursor { row: cur.row, col: cur.col.saturating_sub(1) },
                 Motion::Right => {
                     let b = buf.borrow();
@@ -173,6 +173,20 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 }
             };
 
+            // Character-wise word motions (w, W) used with an operator usually stop at the end of the line
+            // if they would otherwise cross a newline.
+            if op != Operator::None && !motion.is_linewise() && target.row > cur.row {
+                match motion {
+                    Motion::WordForward | Motion::WordForwardBlank => {
+                        let b = buf.borrow();
+                        if let Some(line) = b.get_line(cur.row) {
+                            target = Cursor { row: cur.row, col: line.chars().count() };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             match op {
                 Operator::None => {
                     state.current_window_mut().set_cursor(target.row, target.col);
@@ -192,10 +206,39 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                                 b.delete_char(cur.row, start + 1)?;
                             }
                         } else {
-                            let start_row = cur.row.min(target.row);
-                            let end_row = cur.row.max(target.row);
-                            for _ in start_row..=end_row {
-                                b.delete_line(start_row)?;
+                            let (start, end) = if cur.row < target.row || (cur.row == target.row && cur.col <= target.col) {
+                                (cur, target)
+                            } else {
+                                (target, cur)
+                            };
+
+                            if motion.is_linewise() {
+                                let start_row = start.row;
+                                let end_row = end.row;
+                                for _ in start_row..=end_row {
+                                    b.delete_line(start_row)?;
+                                }
+                            } else {
+                                // Character-wise multi-line deletion
+                                let first_line = b.get_line(start.row).unwrap_or("").to_string();
+                                let last_line = b.get_line(end.row).unwrap_or("").to_string();
+                                
+                                let first_chars: Vec<char> = first_line.chars().collect();
+                                let last_chars: Vec<char> = last_line.chars().collect();
+                                
+                                let mut new_first_line: String = first_chars[..start.col].iter().collect();
+                                let last_part_start = if motion.is_inclusive() { end.col + 1 } else { end.col };
+                                if last_part_start < last_chars.len() {
+                                    let last_part: String = last_chars[last_part_start..].iter().collect();
+                                    new_first_line.push_str(&last_part);
+                                }
+                                
+                                // Delete lines from end to start
+                                for r in (start.row..=end.row).rev() {
+                                    b.delete_line(r)?;
+                                }
+                                // Insert the merged line
+                                b.insert_line(start.row, &new_first_line)?;
                             }
                         }
                         b.end_undo_group();
@@ -218,13 +261,36 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                             set_register_text(state, reg, text);
                         }
                     } else {
+                        let (start, end) = if cur.row < target.row || (cur.row == target.row && cur.col <= target.col) {
+                            (cur, target)
+                        } else {
+                            (target, cur)
+                        };
+
                         let mut content = String::new();
-                        let start_row = cur.row.min(target.row);
-                        let end_row = cur.row.max(target.row);
-                        for r in start_row..=end_row {
-                            if let Some(line) = b.get_line(r) {
-                                content.push_str(line);
-                                content.push('\n');
+                        if motion.is_linewise() {
+                            for r in start.row..=end.row {
+                                if let Some(line) = b.get_line(r) {
+                                    content.push_str(line);
+                                    content.push('\n');
+                                }
+                            }
+                        } else {
+                            // Character-wise multi-line yank
+                            for r in start.row..=end.row {
+                                if let Some(line) = b.get_line(r) {
+                                    let chars: Vec<char> = line.chars().collect();
+                                    let s = if r == start.row { start.col } else { 0 };
+                                    let mut e = if r == end.row { end.col } else { chars.len().saturating_sub(1) };
+                                    if r == end.row && !motion.is_inclusive() && e > 0 {
+                                        e -= 1;
+                                    }
+                                    let text: String = chars[s..=e].iter().collect();
+                                    content.push_str(&text);
+                                    if r < end.row {
+                                        content.push('\n');
+                                    }
+                                }
                             }
                         }
                         set_register_text(state, reg, content);
