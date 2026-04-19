@@ -352,6 +352,16 @@ impl KeyProcessor {
                     _ => None,
                 }
             },
+            (None, 'w') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WordForward }),
+            (None, 'W') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WordForwardBlank }),
+            (None, 'b') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WordBackward }),
+            (None, 'B') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WordBackwardBlank }),
+            (None, 'e') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WordForwardEnd }),
+            (None, 'E') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WordForwardEndBlank }),
+            (None, '0') => Some(Request::OpMotion { op: Operator::None, motion: Motion::LineStart }),
+            (None, '$') => Some(Request::OpMotion { op: Operator::None, motion: Motion::LineEnd }),
+            (None, '^') => Some(Request::OpMotion { op: Operator::None, motion: Motion::LineFirstChar }),
+            (None, 'G') => Some(Request::OpMotion { op: Operator::None, motion: Motion::BufferEnd }),
             (None, '(') => Some(Request::OpMotion { op: Operator::None, motion: Motion::SentenceBackward }),
             (None, ')') => Some(Request::OpMotion { op: Operator::None, motion: Motion::SentenceForward }),
             (None, '{') => Some(Request::OpMotion { op: Operator::None, motion: Motion::ParagraphBackward }),
@@ -373,7 +383,20 @@ impl KeyProcessor {
                 state.current_window_mut().set_cursor(anchor.row, anchor.col);
                 None
             }
-            (None, 'i') | (None, 'a') | (None, '[') | (None, ']') => { state.pending_key = Some(key); None }
+            (None, 'i') | (None, 'a') | (None, '[') | (None, ']') | (None, 'g') | (None, 'f') | (None, 'F') | (None, 't') | (None, 'T') => { state.pending_key = Some(key); None }
+            (None, ';') => Some(Request::RepeatLastCharSearch),
+            (None, ',') => {
+                if let Some(last) = state.last_char_search.clone() {
+                    Some(Request::FindChar { forward: !last.forward, target: last.target, till: last.till })
+                } else { None }
+            }
+            (None, 'n') => Some(Request::SearchNext { forward: true }),
+            (None, 'N') => Some(Request::SearchNext { forward: false }),
+            (Some('f'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, target: key, till: false }) }
+            (Some('F'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, target: key, till: false }) }
+            (Some('t'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, target: key, till: true }) }
+            (Some('T'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, target: key, till: true }) }
+            (Some('g'), 'g') => { state.pending_key = None; Some(Request::OpMotion { op: Operator::None, motion: Motion::BufferStart }) }
             (Some('['), '[') => { state.pending_key = None; Some(Request::OpMotion { op: Operator::None, motion: Motion::SectionBackward }) }
             (Some(']'), ']') => { state.pending_key = None; Some(Request::OpMotion { op: Operator::None, motion: Motion::SectionForward }) }
             (Some('['), ']') => { state.pending_key = None; Some(Request::OpMotion { op: Operator::None, motion: Motion::SectionEndBackward }) }
