@@ -38,6 +38,8 @@ pub struct Buffer {
     readonly: bool,
     /// Stack for collecting grouped undo actions
     undo_group_stack: Vec<Vec<Action>>,
+    /// Whether to record undo actions
+    pub undo_enabled: bool,
 }
 
 impl Buffer {
@@ -60,6 +62,7 @@ impl Buffer {
             modified: false,
             readonly: false,
             undo_group_stack: Vec::new(),
+            undo_enabled: true,
         }
     }
 
@@ -76,6 +79,9 @@ impl Buffer {
     }
 
     fn push_action(&mut self, action: Action) {
+        if !self.undo_enabled {
+            return;
+        }
         if let Some(current_group) = self.undo_group_stack.last_mut() {
             current_group.push(action);
         } else {
@@ -101,6 +107,11 @@ impl Buffer {
 
     pub fn id(&self) -> i32 {
         self.id
+    }
+
+    pub fn clear_undo(&mut self) {
+        self.undo_tree = UndoTree::new();
+        self.undo_group_stack.clear();
     }
 
     pub fn line_count(&self) -> usize {

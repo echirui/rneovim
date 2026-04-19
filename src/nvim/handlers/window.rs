@@ -71,9 +71,11 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             {
                 let mut b = buf.borrow_mut();
                 *b = crate::nvim::buffer::Buffer::new();
+                b.undo_enabled = false;
                 for line in lines {
                     let _ = b.append_line(&line);
                 }
+                b.undo_enabled = true;
                 b.set_name(&path);
                 b.clear_modified();
             }

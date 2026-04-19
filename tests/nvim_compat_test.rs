@@ -98,6 +98,21 @@ fn test_cw_special() {
 }
 
 #[test]
+fn test_dw_undo_multiple() {
+    // Use sample.txt content
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // dw, u, u, u
+    assert_nvim_compat(&content, "dwuuu", "dw_undo_multiple");
+}
+
+#[test]
+fn test_excessive_undo() {
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // Five undos on a fresh buffer should not change anything
+    assert_nvim_compat(&content, "uuuuu", "excessive_undo");
+}
+
+#[test]
 fn test_sample_file_edit() {
     let content = "import requests
 
