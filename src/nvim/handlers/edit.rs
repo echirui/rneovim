@@ -41,6 +41,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 let cur = state.current_window().cursor();
                 let anchor = state.visual_anchor.unwrap_or(cur);
                 state.set_mode(Mode::BlockInsert { append, anchor, cursor: cur });
+                let buf = state.current_window().buffer();
+                buf.borrow_mut().start_undo_group();
             }
         }
         Request::InsertChar(c) => {
@@ -257,6 +259,10 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             if let Some(cur) = res {
                 state.current_window_mut().set_cursor(cur.row, cur.col);
             }
+        }
+        Request::EndUndoGroup => {
+            let buf = state.current_window().buffer();
+            buf.borrow_mut().end_undo_group();
         }
         Request::YankLine => {
             let cur = state.current_window().cursor();

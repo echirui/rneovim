@@ -92,6 +92,13 @@ fn test_block_insert() {
 }
 
 #[test]
+fn test_block_insert_undo() {
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // j, j, Ctrl-v (\x16), j, j, j, j, j, I, !, ESC (\x1b), u
+    assert_nvim_compat(&content, "jj\\x16jjjjjI!\\x1bu", "block_insert_undo");
+}
+
+#[test]
 fn test_cw_special() {
     // cw on a word should not delete the following space
     assert_nvim_compat("import request\n", "cw\\x1b", "cw_special");

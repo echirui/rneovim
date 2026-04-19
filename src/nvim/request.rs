@@ -183,6 +183,7 @@ pub enum Request {
     QuitAll,
     Redraw,
     JumpToPair,
+    EndUndoGroup,
     ShowPum(Vec<String>),
     HidePum,
     SelectPumNext,
