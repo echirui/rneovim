@@ -1,0 +1,15 @@
+import requests
+
+# Send request to download Ramanujan's formula documentation
+url = "https://en.wikipedia.org/wiki/Summation_of_eulerian_numbers"
+response = requests.get(url)
+
+# Parse HTML content using BeautifulSoup
+from bs4 import BeautifulSoup
+soup = BeautifulSoup(response.content, 'html.parser')
+
+# Extract relevant formulas and equations from the webpage
+formulas = soup.find_all('span', {'class': 'latex'})
+
+for formula in formulas:
+    print(formula.text)
