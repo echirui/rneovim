@@ -58,19 +58,17 @@ match req {
             let win = state.current_window();
             let cur = win.cursor();
             let buf = win.buffer();
-            if let Some(path) = buf.borrow().name() {
+            let path_opt = buf.borrow().name().map(|n| n.to_string());
+            if let Some(path) = path_opt {
                 let uri = format!("file://{}", path);
                 lsp.send_definition(100, &uri, cur.row - 1, cur.col);
             }
         }
-    }
-    _ => {}
+    }    _ => {}
 }
 
 // LSP同期
-...
-    if state.lsp_client.is_some() {
-        for buf in &state.buffers {
+if state.lsp_client.is_some() {        for buf in &state.buffers {
             let mut b = buf.borrow_mut();
             if let Some(path) = b.name().map(|n| n.to_string()) {
                 if !b.is_lsp_opened {

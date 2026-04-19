@@ -4,6 +4,8 @@ use std::io::{BufReader, BufRead, Write, Read};
 use std::thread;
 use serde_json::{Value, json};
 use crate::nvim::state::VimState;
+use crate::nvim::request::Request;
+use crate::nvim::api::handle_request;
 use crate::nvim::event::event_loop::EventCallback;
 
 pub struct LspClient {
