@@ -250,9 +250,9 @@ impl KeyProcessor {
             (None, None, 'L') => Some(Request::OpMotion { op: Operator::None, motion: Motion::WindowBottom, count }),
             (None, None, 'p') => Some(Request::Paste),
             (None, None, 'P') => Some(Request::PasteBefore),
-            (None, None, 'x') => Some(Request::DeleteCharAtCursor),
+            (None, None, 'x') => Some(Request::DeleteCharAtCursor { count }),
             (None, None, 'X') => Some(Request::Backspace),
-            (None, None, 's') => { let _ = handle_request(state, Request::DeleteCharAtCursor); Some(Request::SetMode(Mode::Insert)) }
+            (None, None, 's') => { let _ = handle_request(state, Request::DeleteCharAtCursor { count: 1 }); Some(Request::SetMode(Mode::Insert)) }
             (None, None, 'S') => { let _ = handle_request(state, Request::DeleteCurrentLine { count: 1 }); let _ = handle_request(state, Request::OpenLine { below: false }); Some(Request::SetMode(Mode::Insert)) }
             (None, None, '~') => Some(Request::SwitchCase),
             (None, None, '&') => Some(Request::ExecuteCommandFromConfig("&".to_string())),

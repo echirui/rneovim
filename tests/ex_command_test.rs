@@ -97,7 +97,7 @@ fn test_ex_editing_commands() {
 
     // :undo
     state.current_window_mut().set_cursor(1, 0);
-    handle_request(&mut state, Request::DeleteCharAtCursor).unwrap();
+    handle_request(&mut state, Request::DeleteCharAtCursor { count: 1 }).unwrap();
     assert_eq!(state.current_window().buffer().borrow().get_line(1).unwrap(), "irst");
     execute_cmd(&mut state, "undo").unwrap();
     assert_eq!(state.current_window().buffer().borrow().get_line(1).unwrap(), "first");

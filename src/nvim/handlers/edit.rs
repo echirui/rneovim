@@ -129,14 +129,18 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             }
             state.current_window_mut().set_cursor(cur.row, 0);
         }
-        Request::DeleteCharAtCursor => {
+        Request::DeleteCharAtCursor { count } => {
             let cur = state.current_window().cursor();
             let buf = state.current_window().buffer();
             {
                 let mut b = buf.borrow_mut();
-                b.delete_char(cur.row, cur.col + 1)?;
+                b.start_undo_group();
+                for _ in 0..count {
+                    b.delete_char(cur.row, cur.col + 1)?;
+                }
+                b.end_undo_group();
             }
-            state.last_change = Some(Request::DeleteCharAtCursor);
+            state.last_change = Some(Request::DeleteCharAtCursor { count });
         }
         Request::DeleteLine => {
             let cur = state.current_window().cursor();
@@ -352,7 +356,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             b.indent_line(cur.row, forward, tabstop)?;
         }
         Request::ReplaceChar(c) => {
-            handle_request(state, Request::DeleteCharAtCursor)?;
+            handle_request(state, Request::DeleteCharAtCursor { count: 1 })?;
             handle_request(state, Request::InsertChar(c))?;
         }
         Request::SwitchCase => {

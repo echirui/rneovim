@@ -14,7 +14,7 @@ fn test_macro_and_repeat_integration() {
 
     // Record macro @a: 'x' (delete char)
     handle_request(&mut state, Request::StartMacroRecord('a')).unwrap();
-    handle_request(&mut state, Request::DeleteCharAtCursor).unwrap();
+    handle_request(&mut state, Request::DeleteCharAtCursor { count: 1 }).unwrap();
     handle_request(&mut state, Request::StopMacroRecord).unwrap();
 
     // Move to line 2 and play @a

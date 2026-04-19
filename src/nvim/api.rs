@@ -929,7 +929,7 @@ mod tests {
             b.append_line("line 2").unwrap();
         }
         state.current_window_mut().set_cursor(1, 0);
-        handle_request(&mut state, Request::DeleteCharAtCursor).unwrap();
+        handle_request(&mut state, Request::DeleteCharAtCursor { count: 1 }).unwrap();
         handle_request(&mut state, Request::RepeatLastChange { count: 1 }).unwrap();
         {
             let buf = state.current_window().buffer();

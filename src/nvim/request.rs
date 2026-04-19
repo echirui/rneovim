@@ -122,7 +122,7 @@ pub enum Request {
     InsertChar(char),
     InsertModeDeleteWord,
     InsertModeDeleteLine,
-    DeleteCharAtCursor,
+    DeleteCharAtCursor { count: u32 },
     DeleteLine,
     DeleteCurrentLine { count: u32 },
     Backspace,

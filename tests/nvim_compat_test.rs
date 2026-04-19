@@ -135,6 +135,13 @@ fn test_delete_count() {
 }
 
 #[test]
+fn test_delete_char_count() {
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // 5x: delete 5 chars from the start ("impor")
+    assert_nvim_compat(&content, "5x", "delete_char_count");
+}
+
+#[test]
 fn test_insert_undo_simple() {
     assert_nvim_compat("hello\n", "i123\\x1bu", "insert_undo_simple");
 }
