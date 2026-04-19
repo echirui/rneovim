@@ -54,21 +54,37 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Motion::BufferByteOffset => {
                     cur // Requires count input logic, which we can approximate or ignore if parameter isn't passed here
                 },
-                Motion::WordForward | Motion::WordForwardBlank => {
+                Motion::WordForward => {
                     let b = buf.borrow();
                     b.find_word_boundary(cur.row, cur.col, true)
                 },
-                Motion::WordForwardEnd | Motion::WordForwardEndBlank => {
+                Motion::WordForwardBlank => {
+                    let b = buf.borrow();
+                    b.find_big_word_boundary(cur.row, cur.col, true)
+                },
+                Motion::WordForwardEnd => {
                     let b = buf.borrow();
                     b.find_word_end(cur.row, cur.col, true)
                 },
-                Motion::WordBackward | Motion::WordBack | Motion::WordBackwardBlank => {
+                Motion::WordForwardEndBlank => {
+                    let b = buf.borrow();
+                    b.find_big_word_end(cur.row, cur.col, true)
+                },
+                Motion::WordBackward | Motion::WordBack => {
                     let b = buf.borrow();
                     b.find_word_boundary(cur.row, cur.col, false)
                 },
-                Motion::WordBackwardEnd | Motion::WordBackwardEndBlank => {
+                Motion::WordBackwardBlank => {
+                    let b = buf.borrow();
+                    b.find_big_word_boundary(cur.row, cur.col, false)
+                },
+                Motion::WordBackwardEnd => {
                     let b = buf.borrow();
                     b.find_word_end(cur.row, cur.col, false)
+                },
+                Motion::WordBackwardEndBlank => {
+                    let b = buf.borrow();
+                    b.find_big_word_end(cur.row, cur.col, false)
                 },
                 Motion::SentenceForward => {
                     let b = buf.borrow();
@@ -331,7 +347,30 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     b.end_undo_group();
                 },
                 Operator::Change => {
-                    let m = motion.clone();
+                    let mut m = motion.clone();
+                    if let Motion::WordForward = m {
+                        let win = state.current_window();
+                        let cur = win.cursor();
+                        let buf = win.buffer();
+                        let b = buf.borrow();
+                        if let Some(line) = b.get_line(cur.row) {
+                            let chars: Vec<char> = line.chars().collect();
+                            if cur.col < chars.len() && (chars[cur.col].is_alphanumeric() || chars[cur.col] == '_') {
+                                m = Motion::WordForwardEnd;
+                            }
+                        }
+                    } else if let Motion::WordForwardBlank = m {
+                        let win = state.current_window();
+                        let cur = win.cursor();
+                        let buf = win.buffer();
+                        let b = buf.borrow();
+                        if let Some(line) = b.get_line(cur.row) {
+                            let chars: Vec<char> = line.chars().collect();
+                            if cur.col < chars.len() && !chars[cur.col].is_whitespace() {
+                                m = Motion::WordForwardEndBlank;
+                            }
+                        }
+                    }
                     handle_request(state, Request::OpMotion { op: Operator::Delete, motion: m })?;
                     state.set_mode(Mode::Insert);
                 },

@@ -22,7 +22,7 @@ cargo run --release -- "$FILE" --test-keys "$KEYS_RAW" --test-output "$RNEOVIM_O
 cat > run_test.vim <<EOF
 set nocompatible
 edit $FILE
-execute "normal! :1G\r"
+1
 call feedkeys("$KEYS_RAW", 'tx')
 write! $NVIM_OUT
 quitall!
@@ -37,5 +37,9 @@ if diff "$RNEOVIM_OUT" "$NVIM_OUT"; then
     exit 0
 else
     echo "FAILURE: Results differ."
+    echo "Actual (hex):"
+    xxd "$RNEOVIM_OUT"
+    echo "Expected (hex):"
+    xxd "$NVIM_OUT"
     exit 1
 fi

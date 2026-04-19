@@ -123,8 +123,11 @@ impl KeyProcessor {
             (Some(Operator::Indent), None, '>') => { state.pending_op = None; Some(Request::Indent { forward: true }) }
             (Some(Operator::Outdent), None, '<') => { state.pending_op = None; Some(Request::Indent { forward: false }) }
             (Some(op), None, 'w') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::WordForward }) }
-            (Some(op), None, 'b') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::WordBack }) }
+            (Some(op), None, 'W') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::WordForwardBlank }) }
+            (Some(op), None, 'b') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::WordBackward }) }
+            (Some(op), None, 'B') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::WordBackwardBlank }) }
             (Some(op), None, 'e') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::WordForwardEnd }) }
+            (Some(op), None, 'E') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::WordForwardEndBlank }) }
             (Some(op), None, '$') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::LineEnd }) }
             (Some(op), None, '0') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::LineStart }) }
 

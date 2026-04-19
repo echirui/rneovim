@@ -403,6 +403,74 @@ impl Buffer {
         self.signs.get(&lnum)
     }
 
+    /// BIG単語の境界を見つける (W / B)
+    pub fn find_big_word_boundary(&self, lnum: usize, col: usize, forward: bool) -> Cursor {
+        let line = match self.get_line(lnum) {
+            Some(s) => s,
+            None => return Cursor { row: lnum, col },
+        };
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+            if forward {
+                if lnum < self.line_count() { return Cursor { row: lnum + 1, col: 0 }; }
+            } else {
+                if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return Cursor { row: lnum - 1, col: prev.chars().count().saturating_sub(1) };
+                }
+            }
+            return Cursor { row: lnum, col: 0 };
+        }
+
+        if forward {
+            let mut i = col;
+            if i >= chars.len() {
+                if lnum < self.line_count() { return Cursor { row: lnum + 1, col: 0 }; }
+                return Cursor { row: lnum, col: chars.len().saturating_sub(1) };
+            }
+
+            if !chars[i].is_whitespace() {
+                // Word -> end of word -> skip space
+                while i < chars.len() && !chars[i].is_whitespace() { i += 1; }
+                while i < chars.len() && chars[i].is_whitespace() { i += 1; }
+            } else {
+                // Whitespace -> next non-space
+                while i < chars.len() && chars[i].is_whitespace() { i += 1; }
+            }
+
+            if i < chars.len() {
+                Cursor { row: lnum, col: i }
+            } else if lnum < self.line_count() {
+                Cursor { row: lnum + 1, col: 0 }
+            } else {
+                Cursor { row: lnum, col: chars.len().saturating_sub(1) }
+            }
+        } else {
+            // Backward (B)
+            if col == 0 {
+                if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return Cursor { row: lnum - 1, col: prev.chars().count().saturating_sub(1) };
+                }
+                return Cursor { row: lnum, col: 0 };
+            }
+
+            let mut i = col - 1;
+            while i > 0 && chars[i].is_whitespace() { i -= 1; }
+            
+            if i == 0 && chars[i].is_whitespace() {
+                 if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return Cursor { row: lnum - 1, col: prev.chars().count().saturating_sub(1) };
+                }
+                return Cursor { row: lnum, col: 0 };
+            }
+
+            while i > 0 && !chars[i-1].is_whitespace() { i -= 1; }
+            Cursor { row: lnum, col: i }
+        }
+    }
+
     /// 単語の境界を見つける
     pub fn find_word_boundary(&self, lnum: usize, col: usize, forward: bool) -> Cursor {
         let line = match self.get_line(lnum) {
@@ -624,6 +692,33 @@ impl Buffer {
     }
 
     /// 単語の範囲を取得する
+    pub fn get_big_word_range(&self, lnum: usize, col: usize, inner: bool) -> Option<(Cursor, Cursor)> {
+        let line = self.get_line(lnum)?;
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() || col >= chars.len() { return None; }
+        
+        let c = chars[col];
+        if c.is_whitespace() { return None; }
+
+        let mut start = col;
+        while start > 0 && !chars[start-1].is_whitespace() {
+            start -= 1;
+        }
+
+        let mut end = col;
+        while end + 1 < chars.len() && !chars[end+1].is_whitespace() {
+            end += 1;
+        }
+
+        if !inner {
+            while end + 1 < chars.len() && chars[end+1].is_whitespace() {
+                end += 1;
+            }
+        }
+
+        Some((Cursor { row: lnum, col: start }, Cursor { row: lnum, col: end }))
+    }
+
     pub fn get_word_range(&self, lnum: usize, col: usize, inner: bool) -> Option<(Cursor, Cursor)> {
         let line = self.get_line(lnum)?;
         let chars: Vec<char> = line.chars().collect();
@@ -686,31 +781,6 @@ impl Buffer {
             }
         }
         Some((start, end))
-    }
-
-    /// BIG単語の範囲を取得する (W)
-    pub fn get_big_word_range(&self, lnum: usize, col: usize, inner: bool) -> Option<(Cursor, Cursor)> {
-        let line = self.get_line(lnum)?;
-        let chars: Vec<char> = line.chars().collect();
-        if col >= chars.len() { return None; }
-        if chars[col].is_whitespace() { return None; }
-        
-        let mut start = col;
-        while start > 0 && !chars[start-1].is_whitespace() {
-            start -= 1;
-        }
-        let mut end = col;
-        while end + 1 < chars.len() && !chars[end+1].is_whitespace() {
-            end += 1;
-        }
-
-        if !inner {
-            while end + 1 < chars.len() && chars[end+1].is_whitespace() {
-                end += 1;
-            }
-        }
-
-        Some((Cursor { row: lnum, col: start }, Cursor { row: lnum, col: end }))
     }
 
     /// 括弧のペアの範囲を取得する
@@ -812,6 +882,71 @@ impl Buffer {
         }
     }
 
+    /// BIG単語の末尾を見つける (E / gE)
+    pub fn find_big_word_end(&self, lnum: usize, col: usize, forward: bool) -> Cursor {
+        let line = match self.get_line(lnum) {
+            Some(s) => s,
+            None => return Cursor { row: lnum, col },
+        };
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+             if forward {
+                if lnum < self.line_count() { return self.find_big_word_end(lnum + 1, 0, true); }
+            } else {
+                if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return self.find_big_word_end(lnum - 1, prev.chars().count(), false);
+                }
+            }
+            return Cursor { row: lnum, col: 0 };
+        }
+
+        if forward {
+            let mut i = col;
+            if i < chars.len() {
+                if i + 1 < chars.len() {
+                    if !chars[i].is_whitespace() && chars[i+1].is_whitespace() || chars[i].is_whitespace() {
+                        i += 1;
+                        while i < chars.len() && chars[i].is_whitespace() { i += 1; }
+                    }
+                } else {
+                    if lnum < self.line_count() { return self.find_big_word_end(lnum + 1, 0, true); }
+                }
+            }
+
+            if i >= chars.len() {
+                if lnum < self.line_count() { return self.find_big_word_end(lnum + 1, 0, true); }
+                return Cursor { row: lnum, col: chars.len().saturating_sub(1) };
+            }
+
+            while i + 1 < chars.len() && !chars[i+1].is_whitespace() { i += 1; }
+            Cursor { row: lnum, col: i }
+        } else {
+            // gE
+            if col == 0 {
+                if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return self.find_big_word_end(lnum - 1, prev.chars().count(), false);
+                }
+                return Cursor { row: lnum, col: 0 };
+            }
+
+            let mut i = col - 1;
+            while i > 0 && chars[i].is_whitespace() { i -= 1; }
+            
+            if i == 0 && chars[i].is_whitespace() {
+                 if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return self.find_big_word_end(lnum - 1, prev.chars().count(), false);
+                }
+                return Cursor { row: lnum, col: 0 };
+            }
+
+            while i + 1 < chars.len() && !chars[i+1].is_whitespace() { i += 1; }
+            Cursor { row: lnum, col: i }
+        }
+    }
+
     /// 単語の末尾を見つける (e / ge)
     pub fn find_word_end(&self, lnum: usize, col: usize, forward: bool) -> Cursor {
         let line = match self.get_line(lnum) {
@@ -819,27 +954,81 @@ impl Buffer {
             None => return Cursor { row: lnum, col },
         };
         let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+             if forward {
+                if lnum < self.line_count() { return self.find_word_end(lnum + 1, 0, true); }
+            } else {
+                if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return self.find_word_end(lnum - 1, prev.chars().count(), false);
+                }
+            }
+            return Cursor { row: lnum, col: 0 };
+        }
+
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+        let is_symbol = |c: char| !c.is_alphanumeric() && c != '_' && !c.is_whitespace();
 
         if forward {
-            let mut i = col + 1;
-            while i < chars.len() && chars[i].is_whitespace() { i += 1; }
+            let mut i = col;
+            
+            // Move to next non-space char if current is space or we are already at end of a word
+            if i < chars.len() {
+                let current_c = chars[i];
+                if i + 1 < chars.len() {
+                    let next_c = chars[i + 1];
+                    if (is_word_char(current_c) && !is_word_char(next_c)) ||
+                       (is_symbol(current_c) && !is_symbol(next_c)) ||
+                       current_c.is_whitespace() {
+                        i += 1;
+                        while i < chars.len() && chars[i].is_whitespace() { i += 1; }
+                    }
+                } else {
+                    // At the very end of the line
+                    if lnum < self.line_count() { return self.find_word_end(lnum + 1, 0, true); }
+                }
+            }
+
             if i >= chars.len() {
                 if lnum < self.line_count() { return self.find_word_end(lnum + 1, 0, true); }
                 return Cursor { row: lnum, col: chars.len().saturating_sub(1) };
             }
-            while i + 1 < chars.len() && !chars[i+1].is_whitespace() { i += 1; }
+
+            let start_c = chars[i];
+            if is_word_char(start_c) {
+                while i + 1 < chars.len() && is_word_char(chars[i+1]) { i += 1; }
+            } else if is_symbol(start_c) {
+                while i + 1 < chars.len() && is_symbol(chars[i+1]) { i += 1; }
+            }
             Cursor { row: lnum, col: i }
         } else {
+            // ge
             if col == 0 {
                 if lnum > 1 {
-                    let prev_chars_count = self.get_line(lnum - 1).map(|l| l.chars().count()).unwrap_or(1);
-                    return self.find_word_end(lnum - 1, prev_chars_count, false);
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return self.find_word_end(lnum - 1, prev.chars().count(), false);
                 }
-                return Cursor { row: 1, col: 0 };
+                return Cursor { row: lnum, col: 0 };
             }
+
             let mut i = col - 1;
+            // Skip initial whitespace
             while i > 0 && chars[i].is_whitespace() { i -= 1; }
-            while i > 0 && !chars[i-1].is_whitespace() { i -= 1; }
+            
+            if i == 0 && chars[i].is_whitespace() {
+                 if lnum > 1 {
+                    let prev = self.get_line(lnum - 1).unwrap_or("");
+                    return self.find_word_end(lnum - 1, prev.chars().count(), false);
+                }
+                return Cursor { row: lnum, col: 0 };
+            }
+
+            let target_c = chars[i];
+            if is_word_char(target_c) {
+                while i > 0 && is_word_char(chars[i-1]) { i -= 1; }
+            } else if is_symbol(target_c) {
+                while i > 0 && is_symbol(chars[i-1]) { i -= 1; }
+            }
             Cursor { row: lnum, col: i }
         }
     }
