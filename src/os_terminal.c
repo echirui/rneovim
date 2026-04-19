@@ -20,7 +20,15 @@ static struct termios orig_termios;
 void os_setup_terminal() {
     tcgetattr(STDIN_FILENO, &orig_termios);
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON);
+    // Input flags: disable break, CR to NL, parity check, strip 8th bit, and flow control
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    // Output flags: disable post-processing
+    raw.c_oflag &= ~(OPOST);
+    // Control flags: set character size to 8 bits
+    raw.c_cflag |= (CS8);
+    // Local flags: disable echoing, canonical mode, extended input processing, and signals
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);

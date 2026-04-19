@@ -1,4 +1,4 @@
-use crate::nvim::state::{VimState, Mode};
+use crate::nvim::state::{VimState, Mode, VisualMode};
 use crate::nvim::window::Cursor;
 use crate::nvim::request::{Request, Operator, Motion, TextObject};
 use crate::nvim::error::Result;
@@ -269,6 +269,10 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             let cur = win.cursor();
             let anchor = state.visual_anchor.unwrap_or(cur);
             let buf = win.buffer();
+            let vmode = match state.mode {
+                Mode::Visual(m) => m,
+                _ => VisualMode::Char,
+            };
 
             let (start, end) = if anchor.row < cur.row || (anchor.row == cur.row && anchor.col <= cur.col) {
                 (anchor, cur)
@@ -281,16 +285,36 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     {
                         let mut b = buf.borrow_mut();
                         b.start_undo_group();
-                        if start.row == end.row {
-                            let count = end.col - start.col + 1;
-                            for _ in 0..count {
-                                b.delete_char(start.row, start.col + 1)?;
+                        match vmode {
+                            VisualMode::Block => {
+                                let min_col = anchor.col.min(cur.col);
+                                let max_col = anchor.col.max(cur.col);
+                                for r in start.row..=end.row {
+                                    if let Some(line) = b.get_line(r) {
+                                        let chars: Vec<char> = line.chars().collect();
+                                        if min_col < chars.len() {
+                                            let actual_max = max_col.min(chars.len() - 1);
+                                            let count = actual_max - min_col + 1;
+                                            for _ in 0..count {
+                                                b.delete_char(r, min_col + 1)?;
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                        } else {
-                            let start_row = start.row;
-                            let end_row = end.row;
-                            for _ in start_row..=end_row {
-                                b.delete_line(start_row)?;
+                            VisualMode::Char if start.row == end.row => {
+                                let count = end.col - start.col + 1;
+                                for _ in 0..count {
+                                    b.delete_char(start.row, start.col + 1)?;
+                                }
+                            }
+                            _ => {
+                                // Visual Line or Multi-line Visual Char (approx)
+                                let start_row = start.row;
+                                let end_row = end.row;
+                                for _ in start_row..=end_row {
+                                    b.delete_line(start_row)?;
+                                }
                             }
                         }
                         b.end_undo_group();
@@ -300,34 +324,64 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Operator::Yank => {
                     let b = buf.borrow();
                     let reg = state.pending_register.unwrap_or('"');
-                    if start.row == end.row {
-                        if let Some(line) = b.get_line(start.row) {
-                            let text = line.chars().skip(start.col).take(end.col - start.col + 1).collect::<String>();
-                            set_register_text(state, reg, text);
+                    match vmode {
+                        VisualMode::Block => {
+                            let mut content = String::new();
+                            let min_col = anchor.col.min(cur.col);
+                            let max_col = anchor.col.max(cur.col);
+                            for r in start.row..=end.row {
+                                if let Some(line) = b.get_line(r) {
+                                    let chars: Vec<char> = line.chars().collect();
+                                    if min_col < chars.len() {
+                                        let actual_max = max_col.min(chars.len() - 1);
+                                        let text: String = chars[min_col..=actual_max].iter().collect();
+                                        content.push_str(&text);
+                                    }
+                                    content.push('\n');
+                                }
+                            }
+                            set_register_text(state, reg, content);
                         }
-                    } else {
-                        let mut content = String::new();
-                        for r in start.row..=end.row {
-                            if let Some(line) = b.get_line(r) {
-                                let chars: Vec<char> = line.chars().collect();
-                                let s = if r == start.row { start.col } else { 0 };
-                                let e = if r == end.row { end.col.min(chars.len().saturating_sub(1)) } else { chars.len().saturating_sub(1) };
-                                let text: String = chars[s..=e].iter().collect();
-                                content.push_str(&text);
-                                content.push('\n');
+                        VisualMode::Char if start.row == end.row => {
+                            if let Some(line) = b.get_line(start.row) {
+                                let text = line.chars().skip(start.col).take(end.col - start.col + 1).collect::<String>();
+                                set_register_text(state, reg, text);
                             }
                         }
-                        set_register_text(state, reg, content);
+                        _ => {
+                            let mut content = String::new();
+                            for r in start.row..=end.row {
+                                if let Some(line) = b.get_line(r) {
+                                    let chars: Vec<char> = line.chars().collect();
+                                    let s = if r == start.row && vmode == VisualMode::Char { start.col } else { 0 };
+                                    let e = if r == end.row && vmode == VisualMode::Char { end.col.min(chars.len().saturating_sub(1)) } else { chars.len().saturating_sub(1) };
+                                    let text: String = chars[s..=e].iter().collect();
+                                    content.push_str(&text);
+                                    content.push('\n');
+                                }
+                            }
+                            set_register_text(state, reg, content);
+                        }
                     }
                 },
                 Operator::ToUpper | Operator::ToLower | Operator::SwapCase => {
                     let mut b = buf.borrow_mut();
                     b.start_undo_group();
+                    let min_col = anchor.col.min(cur.col);
+                    let max_col = anchor.col.max(cur.col);
                     for r in start.row..=end.row {
                         if let Some(line) = b.get_line(r) {
                             let mut chars: Vec<char> = line.chars().collect();
-                            let s_col = if r == start.row { start.col } else { 0 };
-                            let e_col = if r == end.row { end.col.min(chars.len().saturating_sub(1)) } else { chars.len().saturating_sub(1) };
+                            let s_col = match vmode {
+                                VisualMode::Block => min_col,
+                                VisualMode::Char if r == start.row => start.col,
+                                _ => 0,
+                            };
+                            let e_col = match vmode {
+                                VisualMode::Block => max_col.min(chars.len().saturating_sub(1)),
+                                VisualMode::Char if r == end.row => end.col.min(chars.len().saturating_sub(1)),
+                                _ => chars.len().saturating_sub(1),
+                            };
                             for c_idx in s_col..=e_col {
                                 if let Some(&c) = chars.get(c_idx) {
                                     let new_c = match op {
