@@ -178,6 +178,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     state.current_window_mut().set_cursor(target.row, target.col);
                 },
                 Operator::Delete => {
+                    let start_col = if cur.row == target.row { cur.col.min(target.col) } else { 0 };
                     {
                         let mut b = buf.borrow_mut();
                         if cur.row == target.row {
@@ -195,7 +196,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         }
                     }
                     let new_row = cur.row.min(buf.borrow().line_count());
-                    state.current_window_mut().set_cursor(new_row, 0);
+                    state.current_window_mut().set_cursor(new_row, start_col);
                     state.last_change = Some(Request::OpMotion { op, motion });
                 },
                 Operator::Yank => {
@@ -319,7 +320,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         }
                         b.end_undo_group();
                     }
-                    state.current_window_mut().set_cursor(start.row.min(buf.borrow().line_count()), 0);
+                    let cursor_col = if start.row == end.row && vmode != VisualMode::Line { start.col } else { 0 };
+                    state.current_window_mut().set_cursor(start.row.min(buf.borrow().line_count()), cursor_col);
                 },
                 Operator::Yank => {
                     let b = buf.borrow();
