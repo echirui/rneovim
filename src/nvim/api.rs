@@ -862,11 +862,11 @@ mod tests {
         }
         execute_search(&mut state, "test");
         assert_eq!(state.current_window().cursor().row, 1);
-        handle_request(&mut state, Request::SearchNext { forward: true }).unwrap();
+        handle_request(&mut state, Request::SearchNext { forward: true, count: 1 }).unwrap();
         assert_eq!(state.current_window().cursor().row, 2);
-        handle_request(&mut state, Request::SearchNext { forward: true }).unwrap();
+        handle_request(&mut state, Request::SearchNext { forward: true, count: 1 }).unwrap();
         assert_eq!(state.current_window().cursor().row, 3);
-        handle_request(&mut state, Request::SearchNext { forward: false }).unwrap();
+        handle_request(&mut state, Request::SearchNext { forward: false, count: 1 }).unwrap();
         assert_eq!(state.current_window().cursor().row, 2);
     }
 
@@ -930,7 +930,7 @@ mod tests {
         }
         state.current_window_mut().set_cursor(1, 0);
         handle_request(&mut state, Request::DeleteCharAtCursor).unwrap();
-        handle_request(&mut state, Request::RepeatLastChange).unwrap();
+        handle_request(&mut state, Request::RepeatLastChange { count: 1 }).unwrap();
         {
             let buf = state.current_window().buffer();
             assert_eq!(buf.borrow().get_line(1), Some("ne 1"));

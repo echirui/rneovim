@@ -24,7 +24,7 @@ fn test_mbyte_char_handling() {
     handle_request(&mut state, Request::SetMode(Mode::Normal)).unwrap();
     // 'あいう|' -> cursor at col 3 (after 'う')
     // Motion::Left should go to col 2 (at 'う')
-    handle_request(&mut state, Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Left }).unwrap();
+    handle_request(&mut state, Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Left, count: 1 }).unwrap();
     assert_eq!(state.current_window().cursor().col, 2);
     
     // Replace 'う' with 'え'

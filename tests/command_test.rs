@@ -98,7 +98,8 @@ fn test_operator_textobject_integration() {
     handle_request(&mut state, Request::OpTextObject { 
         op: rneovim::nvim::request::Operator::Change, 
         inner: true, 
-        obj: rneovim::nvim::request::TextObject::Paren 
+        obj: rneovim::nvim::request::TextObject::Paren,
+        count: 1
     }).unwrap();
     
     assert_eq!(state.mode(), Mode::Insert);
@@ -127,7 +128,8 @@ fn test_operator_motion_integration() {
     state.current_window_mut().set_cursor(2, 0);
     handle_request(&mut state, Request::OpMotion { 
         op: rneovim::nvim::request::Operator::Delete, 
-        motion: rneovim::nvim::request::Motion::BufferEnd 
+        motion: rneovim::nvim::request::Motion::BufferEnd,
+        count: 1
     }).unwrap();
     
     {

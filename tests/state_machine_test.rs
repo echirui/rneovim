@@ -29,7 +29,7 @@ fn test_macro_and_repeat_integration() {
 
     // Repeat last change (should be 'x' delete)
     state.current_window_mut().set_cursor(2, 0);
-    handle_request(&mut state, Request::RepeatLastChange).unwrap();
+    handle_request(&mut state, Request::RepeatLastChange { count: 1 }).unwrap();
     {
         let buf = state.current_window().buffer();
         assert_eq!(buf.borrow().get_line(2), Some("ne 2"));

@@ -24,7 +24,7 @@ fn test_buffer_line_manipulation_integration() {
     
     // Delete line 2
     state.current_window_mut().set_cursor(2, 0);
-    handle_request(&mut state, Request::DeleteCurrentLine).unwrap();
+    handle_request(&mut state, Request::DeleteCurrentLine { count: 1 }).unwrap();
     
     // Insert line 5, 6
     state.current_window_mut().set_cursor(1, 0);
