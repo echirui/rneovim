@@ -161,9 +161,9 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 handle_search_next(state, &query, forward);
             }
         }
-        Request::SearchNext { forward } => {
+        Request::SearchNext { forward, count: _ } => {
             if let Some(query) = state.last_search.clone() {
-                handle_search_next(state, &query, forward);
+                crate::nvim::api::handle_search_next(state, &query, forward);
             }
         }
         _ => {}

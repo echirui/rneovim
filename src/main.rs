@@ -181,28 +181,28 @@ fn main() {
                                 if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
                                     Some(Request::CmdLineHistory { forward: false })
                                 } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Up })
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Up, count: 1 })
                                 }
                             }
                             "B" => { // Down
                                 if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
                                     Some(Request::CmdLineHistory { forward: true })
                                 } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Down })
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Down, count: 1 })
                                 }
                             }
                             "C" => { // Right
                                 if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
                                     Some(Request::CmdLineMoveCursor { offset: 1 })
                                 } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Right })
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Right, count: 1 })
                                 }
                             }
                             "D" => { // Left
                                 if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
                                     Some(Request::CmdLineMoveCursor { offset: -1 })
                                 } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Left })
+                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Left, count: 1 })
                                 }
                             }
                             "H" | "1~" => { // Home

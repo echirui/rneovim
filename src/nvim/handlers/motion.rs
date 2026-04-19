@@ -10,184 +10,179 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         Request::CursorMove { row, col } => {
             state.current_window_mut().set_cursor(row, col);
         }
-        Request::OpMotion { op, motion } => {
+        Request::OpMotion { op, motion, count } => {
             let win = state.current_window();
             let cur = win.cursor();
             let buf = win.buffer();
             
-            let mut target = match motion {
-                Motion::Left => Cursor { row: cur.row, col: cur.col.saturating_sub(1) },
-                Motion::Right => {
-                    let b = buf.borrow();
-                    let chars_count = b.get_line(cur.row).map(|l| l.chars().count()).unwrap_or(0);
-                    Cursor { row: cur.row, col: (cur.col + 1).min(chars_count.saturating_sub(1)) }
-                },
-                Motion::Up => Cursor { row: cur.row.saturating_sub(1).max(1), col: cur.col },
-                Motion::Down => {
-                    let b = buf.borrow();
-                    Cursor { row: (cur.row + 1).min(b.line_count()), col: cur.col }
-                },
-                Motion::LineStart => Cursor { row: cur.row, col: 0 },
-                Motion::LineEnd => {
-                    let b = buf.borrow();
-                    let chars_count = b.get_line(cur.row).map(|l| l.chars().count()).unwrap_or(0);
-                    Cursor { row: cur.row, col: chars_count.saturating_sub(1) }
-                },
-                Motion::LineFirstChar => {
-                    let b = buf.borrow();
-                    Cursor { row: cur.row, col: b.find_line_first_char(cur.row) }
-                },
-                Motion::LineLastChar => {
-                    let b = buf.borrow();
-                    Cursor { row: cur.row, col: b.find_line_last_char(cur.row) }
-                },
-                Motion::BufferStart => Cursor { row: 1, col: 0 },
-                Motion::BufferEnd => {
-                    let b = buf.borrow();
-                    Cursor { row: b.line_count(), col: 0 }
-                },
-                Motion::LineMiddle => {
-                    let b = buf.borrow();
-                    let chars_count = b.get_line(cur.row).map(|l| l.chars().count()).unwrap_or(0);
-                    Cursor { row: cur.row, col: chars_count / 2 }
-                },
-                Motion::BufferByteOffset => {
-                    cur // Requires count input logic, which we can approximate or ignore if parameter isn't passed here
-                },
-                Motion::WordForward => {
-                    let b = buf.borrow();
-                    b.find_word_boundary(cur.row, cur.col, true)
-                },
-                Motion::WordForwardBlank => {
-                    let b = buf.borrow();
-                    b.find_big_word_boundary(cur.row, cur.col, true)
-                },
-                Motion::WordForwardEnd => {
-                    let b = buf.borrow();
-                    b.find_word_end(cur.row, cur.col, true)
-                },
-                Motion::WordForwardEndBlank => {
-                    let b = buf.borrow();
-                    b.find_big_word_end(cur.row, cur.col, true)
-                },
-                Motion::WordBackward | Motion::WordBack => {
-                    let b = buf.borrow();
-                    b.find_word_boundary(cur.row, cur.col, false)
-                },
-                Motion::WordBackwardBlank => {
-                    let b = buf.borrow();
-                    b.find_big_word_boundary(cur.row, cur.col, false)
-                },
-                Motion::WordBackwardEnd => {
-                    let b = buf.borrow();
-                    b.find_word_end(cur.row, cur.col, false)
-                },
-                Motion::WordBackwardEndBlank => {
-                    let b = buf.borrow();
-                    b.find_big_word_end(cur.row, cur.col, false)
-                },
-                Motion::SentenceForward => {
-                    let b = buf.borrow();
-                    b.find_sentence_boundary(cur.row, cur.col, true)
-                },
-                Motion::SentenceBackward => {
-                    let b = buf.borrow();
-                    b.find_sentence_boundary(cur.row, cur.col, false)
-                },
-                Motion::ParagraphForward => {
-                    let b = buf.borrow();
-                    b.find_paragraph_boundary(cur.row, cur.col, true)
-                },
-                Motion::ParagraphBackward => {
-                    let b = buf.borrow();
-                    b.find_paragraph_boundary(cur.row, cur.col, false)
-                },
-                Motion::SectionForward => {
-                    let b = buf.borrow();
-                    b.find_section_boundary(cur.row, cur.col, true, false)
-                },
-                Motion::SectionBackward => {
-                    let b = buf.borrow();
-                    b.find_section_boundary(cur.row, cur.col, false, false)
-                },
-                Motion::SectionEndForward => {
-                    let b = buf.borrow();
-                    b.find_section_boundary(cur.row, cur.col, true, true)
-                },
-                Motion::SectionEndBackward => {
-                    let b = buf.borrow();
-                    b.find_section_boundary(cur.row, cur.col, false, true)
-                },
-                Motion::BraceForward => {
-                    let b = buf.borrow();
-                    b.find_char_pos(cur.row, cur.col, '}', true).unwrap_or(cur)
-                },
-                Motion::BraceBackward => {
-                    let b = buf.borrow();
-                    b.find_char_pos(cur.row, cur.col, '{', false).unwrap_or(cur)
-                },
-                Motion::ParenForward => {
-                    let b = buf.borrow();
-                    b.find_char_pos(cur.row, cur.col, ')', true).unwrap_or(cur)
-                },
-                Motion::ParenBackward => {
-                    let b = buf.borrow();
-                    b.find_char_pos(cur.row, cur.col, '(', false).unwrap_or(cur)
-                },
-                Motion::DiagnosticForward | Motion::DiagnosticBackward => {
-                    cur // TODO: Implement when diagnostic system is added
-                },
-                Motion::NextChange => {
-                    let mut b = buf.borrow_mut();
-                    if let Some(action) = b.undo_tree.pop_redo() {
-                        let lnum = match &action {
-                            crate::nvim::undo::Action::InsertLine { lnum, .. } => *lnum,
-                            crate::nvim::undo::Action::DeleteLine { lnum, .. } => *lnum,
-                            crate::nvim::undo::Action::ReplaceLine { lnum, .. } => *lnum,
-                            crate::nvim::undo::Action::Group(actions) => {
-                                match actions.first() {
-                                    Some(crate::nvim::undo::Action::InsertLine { lnum, .. }) => *lnum,
-                                    Some(crate::nvim::undo::Action::DeleteLine { lnum, .. }) => *lnum,
-                                    Some(crate::nvim::undo::Action::ReplaceLine { lnum, .. }) => *lnum,
-                                    _ => 1,
+            let mut target = cur;
+            for _ in 0..count {
+                target = match &motion {
+                    Motion::Left => Cursor { row: target.row, col: target.col.saturating_sub(1) },
+                    Motion::Right => {
+                        let b = buf.borrow();
+                        let chars_count = b.get_line(target.row).map(|l| l.chars().count()).unwrap_or(0);
+                        Cursor { row: target.row, col: (target.col + 1).min(chars_count.saturating_sub(1)) }
+                    },
+                    Motion::Up => Cursor { row: target.row.saturating_sub(1).max(1), col: target.col },
+                    Motion::Down => {
+                        let b = buf.borrow();
+                        Cursor { row: (target.row + 1).min(b.line_count()), col: target.col }
+                    },
+                    Motion::LineStart => Cursor { row: target.row, col: 0 },
+                    Motion::LineEnd => {
+                        let b = buf.borrow();
+                        let chars_count = b.get_line(target.row).map(|l| l.chars().count()).unwrap_or(0);
+                        Cursor { row: target.row, col: chars_count.saturating_sub(1) }
+                    },
+                    Motion::LineFirstChar => {
+                        let b = buf.borrow();
+                        Cursor { row: target.row, col: b.find_line_first_char(target.row) }
+                    },
+                    Motion::LineLastChar => {
+                        let b = buf.borrow();
+                        Cursor { row: target.row, col: b.find_line_last_char(target.row) }
+                    },
+                    Motion::BufferStart => Cursor { row: 1, col: 0 },
+                    Motion::BufferEnd => {
+                        let b = buf.borrow();
+                        Cursor { row: b.line_count(), col: 0 }
+                    },
+                    Motion::LineMiddle => {
+                        let b = buf.borrow();
+                        let chars_count = b.get_line(target.row).map(|l| l.chars().count()).unwrap_or(0);
+                        Cursor { row: target.row, col: chars_count / 2 }
+                    },
+                    Motion::BufferByteOffset => {
+                        target
+                    },
+                    Motion::WordForward => {
+                        let b = buf.borrow();
+                        b.find_word_boundary(target.row, target.col, true)
+                    },
+                    Motion::WordForwardBlank => {
+                        let b = buf.borrow();
+                        b.find_big_word_boundary(target.row, target.col, true)
+                    },
+                    Motion::WordForwardEnd => {
+                        let b = buf.borrow();
+                        b.find_word_end(target.row, target.col, true)
+                    },
+                    Motion::WordForwardEndBlank => {
+                        let b = buf.borrow();
+                        b.find_big_word_end(target.row, target.col, true)
+                    },
+                    Motion::WordBackward | Motion::WordBack => {
+                        let b = buf.borrow();
+                        b.find_word_boundary(target.row, target.col, false)
+                    },
+                    Motion::WordBackwardBlank => {
+                        let b = buf.borrow();
+                        b.find_big_word_boundary(target.row, target.col, false)
+                    },
+                    Motion::WordBackwardEnd => {
+                        let b = buf.borrow();
+                        b.find_word_end(target.row, target.col, false)
+                    },
+                    Motion::WordBackwardEndBlank => {
+                        let b = buf.borrow();
+                        b.find_big_word_end(target.row, target.col, false)
+                    },
+                    Motion::SentenceForward => {
+                        let b = buf.borrow();
+                        b.find_sentence_boundary(target.row, target.col, true)
+                    },
+                    Motion::SentenceBackward => {
+                        let b = buf.borrow();
+                        b.find_sentence_boundary(target.row, target.col, false)
+                    },
+                    Motion::ParagraphForward => {
+                        let b = buf.borrow();
+                        b.find_paragraph_boundary(target.row, target.col, true)
+                    },
+                    Motion::ParagraphBackward => {
+                        let b = buf.borrow();
+                        b.find_paragraph_boundary(target.row, target.col, false)
+                    },
+                    Motion::SectionForward => {
+                        let b = buf.borrow();
+                        b.find_section_boundary(target.row, target.col, true, false)
+                    },
+                    Motion::SectionBackward => {
+                        let b = buf.borrow();
+                        b.find_section_boundary(target.row, target.col, false, false)
+                    },
+                    Motion::SectionEndForward => {
+                        let b = buf.borrow();
+                        b.find_section_boundary(target.row, target.col, true, true)
+                    },
+                    Motion::SectionEndBackward => {
+                        let b = buf.borrow();
+                        b.find_section_boundary(target.row, target.col, false, true)
+                    },
+                    Motion::BraceForward => {
+                        let b = buf.borrow();
+                        b.find_char_pos(target.row, target.col, '}', true).unwrap_or(target)
+                    },
+                    Motion::BraceBackward => {
+                        let b = buf.borrow();
+                        b.find_char_pos(target.row, target.col, '{', false).unwrap_or(target)
+                    },
+                    Motion::ParenForward => {
+                        let b = buf.borrow();
+                        b.find_char_pos(target.row, target.col, ')', true).unwrap_or(target)
+                    },
+                    Motion::ParenBackward => {
+                        let b = buf.borrow();
+                        b.find_char_pos(target.row, target.col, '(', false).unwrap_or(target)
+                    },
+                    Motion::DiagnosticForward | Motion::DiagnosticBackward => {
+                        target
+                    },
+                    Motion::NextChange => {
+                        let mut b = buf.borrow_mut();
+                        if let Some(action) = b.undo_tree.pop_redo() {
+                            let lnum = match &action {
+                                crate::nvim::undo::Action::InsertLine { lnum, .. } => *lnum,
+                                crate::nvim::undo::Action::DeleteLine { lnum, .. } => *lnum,
+                                crate::nvim::undo::Action::ReplaceLine { lnum, .. } => *lnum,
+                                crate::nvim::undo::Action::Group(actions) => {
+                                    match actions.first() {
+                                        Some(crate::nvim::undo::Action::InsertLine { lnum, .. }) => *lnum,
+                                        Some(crate::nvim::undo::Action::DeleteLine { lnum, .. }) => *lnum,
+                                        Some(crate::nvim::undo::Action::ReplaceLine { lnum, .. }) => *lnum,
+                                        _ => 1,
+                                    }
                                 }
-                            }
-                        };
-                        Cursor { row: lnum, col: 0 }
-                    } else { cur }
-                },
-                Motion::PrevChange => {
-                    let mut b = buf.borrow_mut();
-                    if let Some(action) = b.undo_tree.pop_undo() {
-                        let lnum = match &action {
-                            crate::nvim::undo::Action::InsertLine { lnum, .. } => *lnum,
-                            crate::nvim::undo::Action::DeleteLine { lnum, .. } => *lnum,
-                            crate::nvim::undo::Action::ReplaceLine { lnum, .. } => *lnum,
-                            crate::nvim::undo::Action::Group(actions) => {
-                                match actions.first() {
-                                    Some(crate::nvim::undo::Action::InsertLine { lnum, .. }) => *lnum,
-                                    Some(crate::nvim::undo::Action::DeleteLine { lnum, .. }) => *lnum,
-                                    Some(crate::nvim::undo::Action::ReplaceLine { lnum, .. }) => *lnum,
-                                    _ => 1,
+                            };
+                            Cursor { row: lnum, col: 0 }
+                        } else { target }
+                    },
+                    Motion::PrevChange => {
+                        let mut b = buf.borrow_mut();
+                        if let Some(action) = b.undo_tree.pop_undo() {
+                            let lnum = match &action {
+                                crate::nvim::undo::Action::InsertLine { lnum, .. } => *lnum,
+                                crate::nvim::undo::Action::DeleteLine { lnum, .. } => *lnum,
+                                crate::nvim::undo::Action::ReplaceLine { lnum, .. } => *lnum,
+                                crate::nvim::undo::Action::Group(actions) => {
+                                    match actions.first() {
+                                        Some(crate::nvim::undo::Action::InsertLine { lnum, .. }) => *lnum,
+                                        Some(crate::nvim::undo::Action::DeleteLine { lnum, .. }) => *lnum,
+                                        Some(crate::nvim::undo::Action::ReplaceLine { lnum, .. }) => *lnum,
+                                        _ => 1,
+                                    }
                                 }
-                            }
-                        };
-                        Cursor { row: lnum, col: 0 }
-                    } else { cur }
-                },
-                Motion::SearchForward(ref _query) => {
-                    cur // TODO
-                }
-                Motion::WindowTop => {
-                    Cursor { row: win.topline(), col: 0 }
-                }
-                Motion::WindowMiddle => {
-                    Cursor { row: win.topline() + win.height() / 2, col: 0 }
-                }
-                Motion::WindowBottom => {
-                    Cursor { row: win.topline() + win.height().saturating_sub(1), col: 0 }
-                }
-            };
+                            };
+                            Cursor { row: lnum, col: 0 }
+                        } else { target }
+                    },
+                    Motion::SearchForward(_) => {
+                        target
+                    }
+                    _ => target,
+                };
+            }
 
             // Character-wise word motions (w, W) used with an operator usually stop at the end of the line
             // if they would otherwise cross a newline.
@@ -261,7 +256,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     }
                     let new_row = cur.row.min(buf.borrow().line_count());
                     state.current_window_mut().set_cursor(new_row, start_col);
-                    state.last_change = Some(Request::OpMotion { op, motion });
+                    state.last_change = Some(Request::OpMotion { op, motion, count });
                 },
                 Operator::Yank => {
                     let b = buf.borrow();
@@ -315,14 +310,19 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Operator::ToUpper | Operator::ToLower | Operator::SwapCase => {
                     let mut b = buf.borrow_mut();
                     b.start_undo_group();
-                    let start_row = cur.row.min(target.row);
-                    let end_row = cur.row.max(target.row);
+                    let (start, end) = if cur.row < target.row || (cur.row == target.row && cur.col <= target.col) {
+                        (cur, target)
+                    } else {
+                        (target, cur)
+                    };
+                    let start_row = start.row;
+                    let end_row = end.row;
                     for r in start_row..=end_row {
                         if let Some(line) = b.get_line(r) {
                             let mut chars: Vec<char> = line.chars().collect();
-                            let s_col = if r == start_row { cur.col.min(target.col) } else { 0 };
+                            let s_col = if r == start_row { start.col } else { 0 };
                             let e_col = if r == end_row { 
-                                let mut ec = cur.col.max(target.col);
+                                let mut ec = end.col;
                                 if !motion.is_inclusive() && ec > s_col && r == start_row {
                                     ec -= 1;
                                 }
@@ -372,7 +372,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         }
                     }
                     state.set_mode(Mode::Insert);
-                    handle_request(state, Request::OpMotion { op: Operator::Delete, motion: m })?;
+                    handle_request(state, Request::OpMotion { op: Operator::Delete, motion: m, count })?;
                 },
                 Operator::Indent | Operator::Outdent => {
                     let start_row = cur.row.min(target.row);
@@ -597,13 +597,13 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 }
             }
         }
-        Request::OpTextObject { op, inner, obj } => {
+        Request::OpTextObject { op, inner, obj, count } => {
             let win = state.current_window();
             let cur = win.cursor();
             let buf = win.buffer();
             let range = {
                 let b = buf.borrow();
-                match obj {
+                let r1 = match obj {
                     TextObject::Word => b.get_word_range(cur.row, cur.col, inner),
                     TextObject::BigWord => b.get_big_word_range(cur.row, cur.col, inner),
                     TextObject::Paren => b.get_pair_range(cur.row, cur.col, '(', ')', inner),
@@ -616,6 +616,36 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     TextObject::Sentence => b.get_sentence_range(cur.row, cur.col, inner),
                     TextObject::Paragraph => b.get_paragraph_range(cur.row, cur.col, inner),
                     _ => None,
+                };
+                
+                // Count support for text objects (delete 5 words)
+                if count > 1 {
+                    // Approximate by repeating
+                    let mut final_range = r1;
+                    for _ in 1..count {
+                        if let Some((_, end)) = final_range {
+                            let next_pos = if end.col + 1 < b.get_line(end.row).map(|l| l.chars().count()).unwrap_or(0) {
+                                Cursor { row: end.row, col: end.col + 1 }
+                            } else if end.row < b.line_count() {
+                                Cursor { row: end.row + 1, col: 0 }
+                            } else {
+                                end
+                            };
+                            let r2 = match obj {
+                                TextObject::Word => b.get_word_range(next_pos.row, next_pos.col, inner),
+                                TextObject::BigWord => b.get_big_word_range(next_pos.row, next_pos.col, inner),
+                                _ => None,
+                            };
+                            if let Some((_, end2)) = r2 {
+                                final_range = Some((final_range.unwrap().0, end2));
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    final_range
+                } else {
+                    r1
                 }
             };
 
@@ -640,7 +670,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                             b.end_undo_group();
                         }
                         state.current_window_mut().set_cursor(start.row.min(buf.borrow().line_count()), start.col);
-                        state.last_change = Some(Request::OpTextObject { op, inner, obj });
+                        state.last_change = Some(Request::OpTextObject { op, inner, obj, count });
                     },
                     Operator::Yank => {
                         let b = buf.borrow();
@@ -680,7 +710,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     Operator::Change => {
                         let o = obj.clone();
                         state.set_mode(Mode::Insert);
-                        handle_request(state, Request::OpTextObject { op: Operator::Delete, inner, obj: o })?;
+                        handle_request(state, Request::OpTextObject { op: Operator::Delete, inner, obj: o, count })?;
                     }
                     Operator::None => {
                         state.visual_anchor = Some(start);
@@ -690,6 +720,41 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 }
             }
         }
+        Request::DeleteCurrentLine { count } => {
+            let win = state.current_window();
+            let cur = win.cursor();
+            let buf = win.buffer();
+            {
+                let mut b = buf.borrow_mut();
+                b.start_undo_group();
+                for _ in 0..count {
+                    if cur.row <= b.line_count() {
+                        let _ = b.delete_line(cur.row);
+                    }
+                }
+                b.end_undo_group();
+            }
+            let new_row = cur.row.min(buf.borrow().line_count());
+            state.current_window_mut().set_cursor(new_row, 0);
+            state.last_change = Some(Request::DeleteCurrentLine { count });
+        }
+        Request::YankCurrentLine { count } => {
+            let win = state.current_window();
+            let cur = win.cursor();
+            let buf = win.buffer();
+            let mut content = String::new();
+            {
+                let b = buf.borrow();
+                for i in 0..count {
+                    if let Some(line) = b.get_line(cur.row + i as usize) {
+                        content.push_str(line);
+                        content.push('\n');
+                    }
+                }
+            }
+            let reg = state.pending_register.unwrap_or('"');
+            set_register_text(state, reg, content);
+        }
         Request::JumpToPair => {
             let target = state.current_window().buffer().borrow().find_matching_pair(state.current_window().cursor().row, state.current_window().cursor().col);
             if let Some(t) = target {
@@ -698,15 +763,15 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         }
         Request::MoveWord { forward, end: _ } => {
             let motion = if forward { Motion::WordForward } else { Motion::WordBackward };
-            handle_request(state, Request::OpMotion { op: Operator::None, motion })?;
+            handle_request(state, Request::OpMotion { op: Operator::None, motion, count: 1 })?;
         }
         Request::JumpToLineBoundary { end } => {
             let motion = if end { Motion::LineEnd } else { Motion::LineStart };
-            handle_request(state, Request::OpMotion { op: Operator::None, motion })?;
+            handle_request(state, Request::OpMotion { op: Operator::None, motion, count: 1 })?;
         }
         Request::JumpToBufferBoundary { end } => {
             let motion = if end { Motion::BufferEnd } else { Motion::BufferStart };
-            handle_request(state, Request::OpMotion { op: Operator::None, motion })?;
+            handle_request(state, Request::OpMotion { op: Operator::None, motion, count: 1 })?;
         }
         Request::FindChar { forward, target, till } => {
             state.last_char_search = Some(crate::nvim::state::LastCharSearch { target, forward, till });
@@ -732,13 +797,27 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 }
             }
         }
-        Request::RepeatLastCharSearch => {
+        Request::RepeatLastCharSearch { count: _ } => {
             if let Some(last) = state.last_char_search.clone() {
                 handle_request(state, Request::FindChar {
                     forward: last.forward,
                     target: last.target,
                     till: last.till,
                 })?;
+            }
+        }
+        Request::SearchNext { forward, count } => {
+            for _ in 0..count {
+                if let Some(query) = state.last_search.clone() {
+                    crate::nvim::api::handle_search_next(state, &query, forward);
+                }
+            }
+        }
+        Request::RepeatLastChange { count } => {
+            for _ in 0..count {
+                if let Some(last_req) = state.last_change.clone() {
+                    handle_request(state, last_req)?;
+                }
             }
         }
         Request::JumpBack => {

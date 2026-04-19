@@ -47,9 +47,9 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         Request::Quit | Request::QuitAll => {
             state.quit();
         }
-        Request::RepeatLastChange => {
-            if let Some(last_req) = state.last_change.clone() {
-                handle_request(state, last_req)?;
+        Request::RepeatLastChange { count: _ } => {
+            if let Some(last_change) = state.last_change.clone() {
+                handle_request(state, last_change)?;
             }
         }
         Request::SaveShaDa(path) => {

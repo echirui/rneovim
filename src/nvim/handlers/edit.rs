@@ -351,9 +351,6 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             };
             b.indent_line(cur.row, forward, tabstop)?;
         }
-        Request::DeleteCurrentLine => {
-            handle_request(state, Request::DeleteLine)?;
-        }
         Request::ReplaceChar(c) => {
             handle_request(state, Request::DeleteCharAtCursor)?;
             handle_request(state, Request::InsertChar(c))?;

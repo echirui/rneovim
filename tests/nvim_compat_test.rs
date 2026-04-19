@@ -128,6 +128,13 @@ fn test_search_open_undo() {
 }
 
 #[test]
+fn test_delete_count() {
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // d5d: delete 5 lines from the start
+    assert_nvim_compat(&content, "d5d", "delete_count");
+}
+
+#[test]
 fn test_insert_undo_simple() {
     assert_nvim_compat("hello\n", "i123\\x1bu", "insert_undo_simple");
 }
