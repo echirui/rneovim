@@ -129,6 +129,15 @@ pub struct VimState {
     pub keymap: crate::nvim::keymap::KeymapEngine,
     pub quickfix_list: Vec<(String, usize, String)>, // (file, lnum, text)
     pub quit: bool,
+    pub smear_trail: Vec<SmearPoint>,
+    pub last_cursor: Cursor,
+}
+
+#[derive(Debug, Clone)]
+pub struct SmearPoint {
+    pub row: usize, // buffer row
+    pub col: usize, // buffer col
+    pub intensity: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +249,8 @@ impl VimState {
             keymap: crate::nvim::keymap::KeymapEngine::new(),
             quickfix_list: Vec::new(),
             quit: false,
+            smear_trail: Vec::new(),
+            last_cursor: Cursor { row: 1, col: 0 },
         }
     }
 
@@ -373,6 +384,15 @@ impl VimState {
                                     }
                                 }
                             }
+
+                            // Smear trail rendering
+                            for point in &self.smear_trail {
+                                if point.row == lnum && point.col == c_idx {
+                                    bg = Color::Blue;
+                                    break;
+                                }
+                            }
+
                             if is_current_line && c_idx == win_cursor.col && self.mode != Mode::CommandLine && self.mode != Mode::Search {
                                 fg = Color::Black; bg = Color::Cyan; bold = true;
                             }
@@ -380,10 +400,22 @@ impl VimState {
                             current_vcol += c_width;
                         }
                     }
+                    let mut smear_at_end = false;
+                    for point in &self.smear_trail {
+                        if point.row == lnum && point.col >= line.chars().count() {
+                            smear_at_end = true;
+                            break;
+                        }
+                    }
+
                     if is_current_line && win_cursor.col >= line.chars().count() && self.mode != Mode::CommandLine && self.mode != Mode::Search {
                         // RTLでない場合のみ末尾カーソルを表示（RTLは位置が逆転するため）
                         if !has_rtl {
                             self.grid.put_char(row, margin + current_vcol, ' ', Color::Black, Color::Cyan, true);
+                        }
+                    } else if smear_at_end {
+                        if !has_rtl {
+                            self.grid.put_char(row, margin + current_vcol, ' ', Color::Default, Color::Blue, false);
                         }
                     }
                     if let Some(vt) = b.get_virtual_text(lnum) {
@@ -440,6 +472,29 @@ impl VimState {
             }
         }
         self.grid.flush();
+    }
+
+    pub fn update_smear(&mut self) {
+        let current_cursor = self.current_window().cursor();
+        if current_cursor != self.last_cursor {
+            let steps = 5;
+            for i in 0..steps {
+                let t = i as f32 / steps as f32;
+                let r = self.last_cursor.row as f32 + (current_cursor.row as i32 - self.last_cursor.row as i32) as f32 * t;
+                let c = self.last_cursor.col as f32 + (current_cursor.col as i32 - self.last_cursor.col as i32) as f32 * t;
+                self.smear_trail.push(SmearPoint {
+                    row: r.round() as usize,
+                    col: c.round() as usize,
+                    intensity: 1.0 - t * 0.5,
+                });
+            }
+            self.last_cursor = current_cursor;
+        }
+
+        for point in &mut self.smear_trail {
+            point.intensity -= 0.2;
+        }
+        self.smear_trail.retain(|p| p.intensity > 0.0);
     }
 
     pub fn set_mode(&mut self, mode: Mode) {
@@ -620,5 +675,27 @@ mod tests {
     fn test_vim_state_buffers() {
         let state = VimState::new();
         assert_eq!(state.buffers().len(), 1);
+    }
+
+    #[test]
+    fn test_update_smear() {
+        let mut state = VimState::new();
+        {
+            let buf = state.buffers[0].clone();
+            let mut b = buf.borrow_mut();
+            for i in 1..=20 {
+                b.append_line(&format!("line {}", i)).unwrap();
+            }
+        }
+        state.current_window_mut().set_cursor(10, 5);
+        state.update_smear();
+        assert!(!state.smear_trail.is_empty());
+        assert_eq!(state.last_cursor, Cursor { row: 10, col: 5 });
+        
+        let initial_len = state.smear_trail.len();
+        for _ in 0..10 {
+            state.update_smear();
+        }
+        assert!(state.smear_trail.len() < initial_len || state.smear_trail.is_empty());
     }
 }
