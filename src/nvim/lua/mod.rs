@@ -3,6 +3,9 @@ use mlua::{Lua, RegistryKey};
 use std::rc::Rc;
 use std::cell::RefCell;
 use crate::nvim::buffer::Buffer;
+use std::sync::mpsc::Sender;
+use crate::nvim::state::VimState;
+use crate::nvim::event::event_loop::EventCallback;
 
 pub struct LuaEnv {
     lua: Lua,
@@ -14,7 +17,7 @@ impl LuaEnv {
         Self { lua }
     }
 
-    pub fn register_api(&self, buffers: Vec<Rc<RefCell<Buffer>>>) -> Result<()> {
+    pub fn register_api(&self, buffers: Vec<Rc<RefCell<Buffer>>>, sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
         let globals = self.lua.globals();
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
@@ -40,9 +43,31 @@ impl LuaEnv {
             Ok(())
         })?;
 
+        let sender_clone = sender.clone();
+        let nvim_command = self.lua.create_function(move |_, cmd: String| {
+            if let Some(s) = &sender_clone {
+                let _ = s.send(Box::new(move |state| {
+                    let _ = crate::nvim::api::execute_cmd(state, &cmd);
+                }));
+            }
+            Ok(())
+        })?;
+
+        let sender_clone_2 = sender.clone();
+        let cmd_alias = self.lua.create_function(move |_, cmd: String| {
+            if let Some(s) = &sender_clone_2 {
+                let _ = s.send(Box::new(move |state| {
+                    let _ = crate::nvim::api::execute_cmd(state, &cmd);
+                }));
+            }
+            Ok(())
+        })?;
+
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
         api.set("nvim_set_decoration_provider", nvim_set_decoration_provider)?;
+        api.set("nvim_command", nvim_command)?;
         vim.set("api", api)?;
+        vim.set("cmd", cmd_alias)?;
         globals.set("vim", vim)?;
         Ok(())
     }
@@ -58,6 +83,41 @@ impl LuaEnv {
                 _ => Ok(format!("{:?}", val)),
             },
             Err(e) => Err(NvimError::Api(format!("Lua error: {}", e))),
+        }
+    }
+
+    pub fn execute_file(&self, path: &std::path::Path) -> Result<String> {
+        let code = std::fs::read_to_string(path).map_err(|e| NvimError::Api(format!("Failed to read lua file: {}", e)))?;
+        self.execute(&code)
+    }
+
+    pub fn load_plugins(&self, config_dir: Option<std::path::PathBuf>) {
+        let base_dir = config_dir.or_else(|| dirs::config_dir()).unwrap_or_else(|| std::path::PathBuf::from("."));
+        let rneovim_dir = base_dir.join("rneovim");
+        
+        // Source init.lua
+        let init_lua = rneovim_dir.join("init.lua");
+        if init_lua.exists() {
+            if let Err(e) = self.execute_file(&init_lua) {
+                eprintln!("Error executing init.lua: {}", e);
+            }
+        }
+
+        // Source files in plugin/
+        let plugin_dir = rneovim_dir.join("plugin");
+        if plugin_dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(plugin_dir) {
+                let mut files: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+                files.sort_by_key(|e| e.path());
+                for entry in files {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("lua") {
+                        if let Err(e) = self.execute_file(&path) {
+                            eprintln!("Error executing plugin {:?}: {}", path, e);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -101,5 +161,26 @@ mod tests {
         let env = LuaEnv::new();
         let res = env.execute("non_existent_function()");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_load_plugins() {
+        let env = LuaEnv::new();
+        let temp_dir = std::env::temp_dir().join("rneovim_test_plugins");
+        let rneovim_dir = temp_dir.join("rneovim");
+        std::fs::create_dir_all(rneovim_dir.join("plugin")).unwrap();
+        
+        let init_lua = rneovim_dir.join("init.lua");
+        std::fs::write(&init_lua, "TEST_INIT = true").unwrap();
+        
+        let plugin_lua = rneovim_dir.join("plugin").join("test.lua");
+        std::fs::write(&plugin_lua, "TEST_PLUGIN = true").unwrap();
+        
+        env.load_plugins(Some(temp_dir.clone()));
+        
+        assert_eq!(env.execute("return TEST_INIT").unwrap(), "true");
+        assert_eq!(env.execute("return TEST_PLUGIN").unwrap(), "true");
+        
+        std::fs::remove_dir_all(temp_dir).unwrap();
     }
 }

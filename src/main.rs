@@ -89,6 +89,7 @@ fn main() {
 
     let (sender, _receiver) = mpsc::channel();
     state.sender = Some(sender.clone());
+    state.init_plugins();
 
     unsafe { os_setup_terminal() };
     print!("\x1B[2J\x1B[H\x1B[?25l\x1B[?1000h\x1B[?1006h");

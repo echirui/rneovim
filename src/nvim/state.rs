@@ -481,6 +481,13 @@ impl VimState {
     pub fn quit(&mut self) { self.quit = true; }
     pub fn should_quit(&self) -> bool { self.quit }
 
+    pub fn init_plugins(&self) {
+        if let Err(e) = self.lua_env.register_api(self.buffers.clone(), self.sender.clone()) {
+            eprintln!("Failed to register Lua API: {}", e);
+        }
+        self.lua_env.load_plugins(None);
+    }
+
     pub fn buffers(&self) -> &Vec<Rc<RefCell<Buffer>>> { &self.buffers }
 
     pub fn format_statusline(&self) -> String {
