@@ -118,6 +118,9 @@ pub fn execute_search_internal(state: &mut VimState, query: &str, save_history: 
     let buf_ref = state.current_window().buffer();
     let b = buf_ref.borrow();
     let current_cursor = state.current_window().cursor();
+    
+    // アニメーションのために開始位置を記録
+    state.smear_cursor = (current_cursor.row as f32, current_cursor.col as f32);
 
     for lnum in current_cursor.row..=b.line_count() {
         if let Some(line) = b.get_line(lnum) {
@@ -150,6 +153,10 @@ pub fn handle_search_next(state: &mut VimState, query: &str, forward: bool) {
     let query_converted = crate::nvim::regexp::convert_vim_regex(query);
     let win = state.current_window_mut();
     let cur = win.cursor();
+    
+    // アニメーションのために開始位置を記録
+    state.smear_cursor = (cur.row as f32, cur.col as f32);
+
     let buf = win.buffer();
     let b = buf.borrow();
     let line_count = b.line_count();

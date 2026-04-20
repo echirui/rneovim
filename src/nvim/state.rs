@@ -489,37 +489,32 @@ impl VimState {
         let dist_sq = dr * dr + dc * dc;
 
         if dist_sq > 0.01 {
-            // Lerp towards target (faster catch-up)
-            let lerp_factor = 0.4;
+            // Lerp towards target
+            let lerp_factor = 0.3; // Slower catch-up for more visible trail
             current_r += dr * lerp_factor;
             current_c += dc * lerp_factor;
             
             self.smear_cursor = (current_r, current_c);
             
-            // Add point to trail at current intermediate position
-            self.smear_trail.push(SmearPoint {
-                row: current_r.round() as usize,
-                col: current_c.round() as usize,
-                intensity: 1.0,
-            });
-
-            // If we moved a lot, add a few more points to fill gaps
-            if dist_sq > 4.0 {
-                 let mid_r = current_r - dr * lerp_factor * 0.5;
-                 let mid_c = current_c - dc * lerp_factor * 0.5;
-                 self.smear_trail.push(SmearPoint {
-                    row: mid_r.round() as usize,
-                    col: mid_c.round() as usize,
-                    intensity: 0.8,
+            // Add multiple points to trail for higher density
+            let sub_steps = 3;
+            for i in 1..=sub_steps {
+                let f = i as f32 / sub_steps as f32;
+                let r = current_r - dr * lerp_factor * (1.0 - f);
+                let c = current_c - dc * lerp_factor * (1.0 - f);
+                self.smear_trail.push(SmearPoint {
+                    row: r.round() as usize,
+                    col: c.round() as usize,
+                    intensity: 1.0,
                 });
             }
         } else {
             self.smear_cursor = (target_r, target_c);
         }
 
-        // Fading
+        // Slower fading
         for point in &mut self.smear_trail {
-            point.intensity -= 0.15;
+            point.intensity -= 0.08;
         }
         self.smear_trail.retain(|p| p.intensity > 0.0);
     }
