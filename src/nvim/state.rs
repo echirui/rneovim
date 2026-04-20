@@ -131,6 +131,7 @@ pub struct VimState {
     pub quit: bool,
     pub smear_trail: Vec<SmearPoint>,
     pub last_cursor: Cursor,
+    pub smear_cursor: (f32, f32),
 }
 
 #[derive(Debug, Clone)]
@@ -251,6 +252,7 @@ impl VimState {
             quit: false,
             smear_trail: Vec::new(),
             last_cursor: Cursor { row: 1, col: 0 },
+            smear_cursor: (1.0, 0.0),
         }
     }
 
@@ -475,24 +477,49 @@ impl VimState {
     }
 
     pub fn update_smear(&mut self) {
-        let current_cursor = self.current_window().cursor();
-        if current_cursor != self.last_cursor {
-            let steps = 5;
-            for i in 0..steps {
-                let t = i as f32 / steps as f32;
-                let r = self.last_cursor.row as f32 + (current_cursor.row as i32 - self.last_cursor.row as i32) as f32 * t;
-                let c = self.last_cursor.col as f32 + (current_cursor.col as i32 - self.last_cursor.col as i32) as f32 * t;
-                self.smear_trail.push(SmearPoint {
-                    row: r.round() as usize,
-                    col: c.round() as usize,
-                    intensity: 1.0 - t * 0.5,
+        let target = self.current_window().cursor();
+        let target_r = target.row as f32;
+        let target_c = target.col as f32;
+
+        let (mut current_r, mut current_c) = self.smear_cursor;
+        
+        // Distance check
+        let dr = target_r - current_r;
+        let dc = target_c - current_c;
+        let dist_sq = dr * dr + dc * dc;
+
+        if dist_sq > 0.01 {
+            // Lerp towards target (faster catch-up)
+            let lerp_factor = 0.4;
+            current_r += dr * lerp_factor;
+            current_c += dc * lerp_factor;
+            
+            self.smear_cursor = (current_r, current_c);
+            
+            // Add point to trail at current intermediate position
+            self.smear_trail.push(SmearPoint {
+                row: current_r.round() as usize,
+                col: current_c.round() as usize,
+                intensity: 1.0,
+            });
+
+            // If we moved a lot, add a few more points to fill gaps
+            if dist_sq > 4.0 {
+                 let mid_r = current_r - dr * lerp_factor * 0.5;
+                 let mid_c = current_c - dc * lerp_factor * 0.5;
+                 self.smear_trail.push(SmearPoint {
+                    row: mid_r.round() as usize,
+                    col: mid_c.round() as usize,
+                    intensity: 0.8,
                 });
             }
-            self.last_cursor = current_cursor;
+        } else {
+            self.smear_cursor = (target_r, target_c);
         }
 
+        // Fading
         for point in &mut self.smear_trail {
-            point.intensity -= 0.2;
+            point.intensity -= 0.15;
         }
         self.smear_trail.retain(|p| p.intensity > 0.0);
     }
@@ -689,13 +716,21 @@ mod tests {
         }
         state.current_window_mut().set_cursor(10, 5);
         state.update_smear();
-        assert!(!state.smear_trail.is_empty());
-        assert_eq!(state.last_cursor, Cursor { row: 10, col: 5 });
         
-        let initial_len = state.smear_trail.len();
-        for _ in 0..10 {
+        // Should have started moving towards (10, 5)
+        assert!(!state.smear_trail.is_empty());
+        assert!(state.smear_cursor.0 > 1.0); 
+        
+        // Eventually should reach target
+        for _ in 0..50 {
             state.update_smear();
         }
-        assert!(state.smear_trail.len() < initial_len || state.smear_trail.is_empty());
+        assert_eq!(state.smear_cursor, (10.0, 5.0));
+        
+        // Eventually trail should disappear
+        for _ in 0..50 {
+            state.update_smear();
+        }
+        assert!(state.smear_trail.is_empty());
     }
 }
