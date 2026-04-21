@@ -38,13 +38,10 @@ impl LuaEnv {
     fn sync_package_path(lua: &Lua, rtp: &str) -> mlua::Result<()> {
         let package: mlua::Table = lua.globals().get("package")?;
         let mut path: String = package.get("path")?;
-        
         for p in rtp.split(',') {
             let lua_path1 = format!("{}/lua/?.lua", p);
             let lua_path2 = format!("{}/lua/?/init.lua", p);
-            if !path.contains(&lua_path1) {
-                path = format!("{};{};{}", lua_path1, lua_path2, path);
-            }
+            if !path.contains(&lua_path1) { path = format!("{};{};{}", lua_path1, lua_path2, path); }
         }
         package.set("path", path)?;
         Ok(())
@@ -55,14 +52,6 @@ impl LuaEnv {
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
 
-        // 初期 rtp の同期
-        if let Some(mut wrapper) = self.lua.app_data_mut::<StateWrapper>() {
-            let state = unsafe { &*wrapper.0 };
-            if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") {
-                let _ = Self::sync_package_path(&self.lua, rtp);
-            }
-        }
-
         let print = self.lua.create_function(|lua, msg: String| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -70,7 +59,8 @@ impl LuaEnv {
             }
             Ok(())
         })?;
-        globals.set("print", print)?;
+        globals.set("print", print.clone())?;
+        vim.set("notify", print)?;
 
         let buffers_clone = buffers.clone();
         let nvim_buf_get_lines = self.lua.create_function(move |_, (buf_id, start, end, _): (i32, usize, i32, bool)| {
@@ -78,9 +68,7 @@ impl LuaEnv {
                 let b = buf_rc.borrow();
                 let actual_end = if end < 0 { b.line_count() } else { end as usize };
                 let mut lines = Vec::new();
-                for i in (start + 1)..=actual_end {
-                    if let Some(line) = b.get_line(i) { lines.push(line.to_string()); }
-                }
+                for i in (start + 1)..=actual_end { if let Some(line) = b.get_line(i) { lines.push(line.to_string()); } }
                 Ok(lines)
             } else { Ok(Vec::new()) }
         })?;
@@ -106,6 +94,14 @@ impl LuaEnv {
                 }
             }
             Ok(())
+        })?;
+
+        let nvim_buf_line_count = self.lua.create_function(|lua, buf_id: i32| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) { return Ok(buf_rc.borrow().line_count()); }
+            }
+            Ok(0)
         })?;
 
         let nvim_create_buf = self.lua.create_function(|lua, (_listed, _scratch): (bool, bool)| {
@@ -138,10 +134,12 @@ impl LuaEnv {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
-                    let row = config.get::<usize>("row").unwrap_or(0);
-                    let col = config.get::<usize>("col").unwrap_or(0);
-                    let width = config.get::<usize>("width").unwrap_or(40);
-                    let height = config.get::<usize>("height").unwrap_or(10);
+                    // 数値(f64) または 整数(usize) 両方を受け取れるようにする
+                    let row = config.get::<mlua::Value>("row").map(|v| match v { mlua::Value::Number(f) => f.round() as usize, mlua::Value::Integer(i) => i as usize, _ => 0 }).unwrap_or(0);
+                    let col = config.get::<mlua::Value>("col").map(|v| match v { mlua::Value::Number(f) => f.round() as usize, mlua::Value::Integer(i) => i as usize, _ => 0 }).unwrap_or(0);
+                    let width = config.get::<mlua::Value>("width").map(|v| match v { mlua::Value::Number(f) => f.round() as usize, mlua::Value::Integer(i) => i as usize, _ => 40 }).unwrap_or(40);
+                    let height = config.get::<mlua::Value>("height").map(|v| match v { mlua::Value::Number(f) => f.round() as usize, mlua::Value::Integer(i) => i as usize, _ => 10 }).unwrap_or(10);
+                    
                     let win_config = crate::nvim::window::WinConfig { row, col, width, height, focusable: true, external: false };
                     let win = crate::nvim::window::Window::new_floating(buf_rc.clone(), win_config);
                     let win_id = win.id();
@@ -154,6 +152,24 @@ impl LuaEnv {
             Ok(0)
         })?;
 
+        let nvim_win_get_buf = self.lua.create_function(|lua, win_id: i32| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                for win in &state.current_tabpage().windows {
+                    if win.id() == win_id { return Ok(win.buffer().borrow().id()); }
+                }
+            }
+            Ok(0)
+        })?;
+
+        let nvim_buf_get_option = self.lua.create_function(|lua, (_buf, name): (i32, String)| {
+            match name.as_str() {
+                "filetype" => Ok(mlua::Value::String(lua.create_string("text")?)),
+                "buftype" => Ok(mlua::Value::String(lua.create_string("")?)),
+                _ => Ok(mlua::Value::Nil),
+            }
+        })?;
+
         let nvim_create_user_command = self.lua.create_function(|lua, (name, callback, _opts): (String, mlua::Value, mlua::Table)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -164,38 +180,31 @@ impl LuaEnv {
             }
             Ok(())
         })?;
-// nvim_get_mode
-let nvim_get_mode = self.lua.create_function(|lua, _: ()| {
-    let res = lua.create_table()?;
-    res.set("mode", "n")?;
-    res.set("blocking", false)?;
-    Ok(res)
-})?;
 
-// nvim_buf_line_count
-let nvim_buf_line_count = self.lua.create_function(|lua, buf_id: i32| {
-    if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
-        let state = unsafe { &*wrapper.0 };
-        if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
-            return Ok(buf_rc.borrow().line_count());
-        }
-    }
-    Ok(0)
-})?;
+        let nvim_get_mode = self.lua.create_function(|lua, _: ()| {
+            let res = lua.create_table()?;
+            res.set("mode", "n")?;
+            res.set("blocking", false)?;
+            Ok(res)
+        })?;
 
-let nvim_create_namespace = self.lua.create_function(|_, _name: String| { Ok(1) })?;
+        let nvim_create_namespace = self.lua.create_function(|_, _name: String| { Ok(1) })?;
+        let nvim_replace_termcodes = self.lua.create_function(|_, (str, _1, _2, _3): (String, bool, bool, bool)| { Ok(str) })?;
 
-api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
-api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
-api.set("nvim_buf_set_name", nvim_buf_set_name)?;
-api.set("nvim_buf_line_count", nvim_buf_line_count)?;
-api.set("nvim_create_buf", nvim_create_buf)?;
+        api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
+        api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
+        api.set("nvim_buf_set_name", nvim_buf_set_name)?;
+        api.set("nvim_buf_line_count", nvim_buf_line_count)?;
+        api.set("nvim_buf_get_option", nvim_buf_get_option)?;
+        api.set("nvim_win_get_buf", nvim_win_get_buf)?;
+        api.set("nvim_create_buf", nvim_create_buf)?;
         api.set("nvim_get_current_buf", nvim_get_current_buf)?;
         api.set("nvim_list_bufs", nvim_list_bufs)?;
         api.set("nvim_open_win", nvim_open_win)?;
         api.set("nvim_create_user_command", nvim_create_user_command)?;
         api.set("nvim_get_mode", nvim_get_mode)?;
         api.set("nvim_create_namespace", nvim_create_namespace)?;
+        api.set("nvim_replace_termcodes", nvim_replace_termcodes)?;
 
         let nvim_list_runtime_paths = self.lua.create_function(|lua, _: ()| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
@@ -231,11 +240,7 @@ api.set("nvim_create_buf", nvim_create_buf)?;
                     _ => return Ok(()),
                 };
                 state.options.insert(name.clone(), val.clone());
-                if name == "runtimepath" || name == "rtp" {
-                    if let crate::nvim::state::OptionValue::String(ref rtp) = val {
-                        let _ = Self::sync_package_path(lua, rtp);
-                    }
-                }
+                if name == "runtimepath" || name == "rtp" { if let crate::nvim::state::OptionValue::String(ref rtp) = val { let _ = Self::sync_package_path(lua, rtp); } }
             }
             Ok(())
         })?;
@@ -247,10 +252,7 @@ api.set("nvim_create_buf", nvim_create_buf)?;
                 if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") {
                     for path in rtp.split(',') {
                         let full_path = std::path::Path::new(path).join(&name);
-                        if full_path.exists() {
-                            results.push(full_path.to_string_lossy().to_string());
-                            if !all { break; }
-                        }
+                        if full_path.exists() { results.push(full_path.to_string_lossy().to_string()); if !all { break; } }
                     }
                 }
             }
@@ -323,12 +325,10 @@ api.set("nvim_create_buf", nvim_create_buf)?;
         let lua_ref = self.lua.clone();
         opt_meta.set("__index", self.lua.create_function(move |lua, (_table, name): (mlua::Table, String)| {
             let inner_opt = lua.create_table()?;
-            let name_clone = name.clone();
-            let lua_clone = lua_ref.clone();
             
             // prepend
-            let name_p = name_clone.clone();
-            let lua_p = lua_clone.clone();
+            let name_p = name.clone();
+            let lua_p = lua_ref.clone();
             inner_opt.set("prepend", lua.create_function(move |lua, args: mlua::MultiValue| {
                 let value = if args.len() >= 2 { match args.get(1) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } }
                 else { match args.get(0) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } };
@@ -345,8 +345,8 @@ api.set("nvim_create_buf", nvim_create_buf)?;
             })?)?;
 
             // append
-            let name_a = name_clone.clone();
-            let lua_a = lua_clone.clone();
+            let name_a = name.clone();
+            let lua_a = lua_ref.clone();
             inner_opt.set("append", lua.create_function(move |lua, args: mlua::MultiValue| {
                 let value = if args.len() >= 2 { match args.get(1) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } }
                 else { match args.get(0) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } };
@@ -361,33 +361,24 @@ api.set("nvim_create_buf", nvim_create_buf)?;
                 }
                 Ok(())
             })?)?;
-
             Ok(inner_opt)
         })?)?;
         let _ = opt.set_metatable(Some(opt_meta));
         vim.set("opt", opt)?;
 
-        // vim.g implementation
         let g = self.lua.create_table()?;
         let g_meta = self.lua.create_table()?;
         g_meta.set("__index", self.lua.create_function(|lua, (_table, name): (mlua::Table, String)| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
-                if let Some(val) = state.globals.get(&name) {
-                    return Ok(mlua::Value::String(lua.create_string(val)?));
-                }
+                if let Some(val) = state.globals.get(&name) { return Ok(mlua::Value::String(lua.create_string(val)?)); }
             }
             Ok(mlua::Value::Nil)
         })?)?;
         g_meta.set("__newindex", self.lua.create_function(|lua, (_table, name, value): (mlua::Table, String, mlua::Value)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
-                let val_str = match value {
-                    mlua::Value::String(s) => s.to_string_lossy().to_string(),
-                    mlua::Value::Boolean(b) => b.to_string(),
-                    mlua::Value::Integer(i) => i.to_string(),
-                    _ => "".to_string(),
-                };
+                let val_str = match value { mlua::Value::String(s) => s.to_string_lossy().to_string(), mlua::Value::Boolean(b) => b.to_string(), mlua::Value::Integer(i) => i.to_string(), _ => "".to_string() };
                 state.globals.insert(name, val_str);
             }
             Ok(())
@@ -395,7 +386,6 @@ api.set("nvim_create_buf", nvim_create_buf)?;
         let _ = g.set_metatable(Some(g_meta));
         vim.set("g", g)?;
 
-        // vim.go implementation
         let go = self.lua.create_table()?;
         let go_meta = self.lua.create_table()?;
         go_meta.set("__index", self.lua.create_function(|lua, (_table, name): (mlua::Table, String)| {
@@ -414,12 +404,7 @@ api.set("nvim_create_buf", nvim_create_buf)?;
         go_meta.set("__newindex", self.lua.create_function(|lua, (_table, name, value): (mlua::Table, String, mlua::Value)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
-                let val = match value {
-                    mlua::Value::Boolean(b) => crate::nvim::state::OptionValue::Bool(b),
-                    mlua::Value::Integer(i) => crate::nvim::state::OptionValue::Int(i),
-                    mlua::Value::String(s) => crate::nvim::state::OptionValue::String(s.to_string_lossy().to_string()),
-                    _ => return Ok(()),
-                };
+                let val = match value { mlua::Value::Boolean(b) => crate::nvim::state::OptionValue::Bool(b), mlua::Value::Integer(i) => crate::nvim::state::OptionValue::Int(i), mlua::Value::String(s) => crate::nvim::state::OptionValue::String(s.to_string_lossy().to_string()), _ => return Ok(()) };
                 state.options.insert(name, val);
             }
             Ok(())
@@ -435,22 +420,13 @@ api.set("nvim_create_buf", nvim_create_buf)?;
                 Ok(mlua::Value::Table(table))
             } else { Ok(mlua::Value::Nil) }
         })?)?;
-
-        loop_table.set("hrtime", self.lua.create_function(|_, _: ()| {
-            Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64)
-        })?)?;
-
-        loop_table.set("cwd", self.lua.create_function(|_, _: ()| {
-            Ok(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string())
-        })?)?;
-
+        loop_table.set("hrtime", self.lua.create_function(|_, _: ()| { Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64) })?)?;
+        loop_table.set("cwd", self.lua.create_function(|_, _: ()| { Ok(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string()) })?)?;
         loop_table.set("os_uname", self.lua.create_function(|lua, _: ()| {
             let table = lua.create_table()?;
-            table.set("sysname", std::env::consts::OS)?;
-            table.set("machine", std::env::consts::ARCH)?;
+            table.set("sysname", std::env::consts::OS)?; table.set("machine", std::env::consts::ARCH)?;
             Ok(table)
         })?)?;
-
         vim.set("loop", &loop_table)?;
         vim.set("uv", loop_table)?;
 
@@ -482,12 +458,7 @@ api.set("nvim_create_buf", nvim_create_buf)?;
         let rneovim_config = config_dir.unwrap_or_else(Self::get_config_dir);
         let rneovim_data = Self::get_data_dir();
         if !rneovim_data.exists() { let _ = std::fs::create_dir_all(rneovim_data.join("lazy")); }
-        
-        // 初期パス同期
-        if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") {
-            let _ = Self::sync_package_path(&self.lua, rtp);
-        }
-
+        if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") { let _ = Self::sync_package_path(&self.lua, rtp); }
         let init_lua = rneovim_config.join("init.lua");
         if init_lua.exists() {
             if let Err(e) = self.execute_file(&init_lua) {
