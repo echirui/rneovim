@@ -73,9 +73,18 @@ impl LuaEnv {
         })?;
         api.set("nvim_err_writeln", nvim_err_writeln)?;
 
-        let nvim_buf_get_lines = self.lua.create_function(|_, (buf_id, start, end, _): (i32, usize, i32, bool)| {
-            // ... buf rc find logic
-            Ok(Vec::<String>::new()) // Placeholder
+        let nvim_buf_get_lines = self.lua.create_function(|lua, (buf_id, start, end, _): (i32, usize, i32, bool)| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
+                    let b = buf_rc.borrow();
+                    let actual_end = if end < 0 { b.line_count() } else { end as usize };
+                    let mut lines = Vec::new();
+                    for i in (start + 1)..=actual_end { if let Some(line) = b.get_line(i) { lines.push(line.to_string()); } }
+                    return Ok(lines);
+                }
+            }
+            Ok(Vec::new())
         })?;
 
         let nvim_buf_set_lines = self.lua.create_function(|lua, (buf_id, start, end, _strict, lines): (i32, usize, i32, bool, Vec<String>)| {
@@ -171,6 +180,17 @@ impl LuaEnv {
             }
         })?;
 
+        let nvim_buf_set_option = self.lua.create_function(|_, (_buf, _name, _val): (i32, String, mlua::Value)| { Ok(()) })?;
+        let nvim_win_set_option = self.lua.create_function(|_, (_win, _name, _val): (i32, String, mlua::Value)| { Ok(()) })?;
+
+        let nvim_win_get_config = self.lua.create_function(|lua, _win: i32| {
+            let res = lua.create_table()?;
+            res.set("relative", "editor")?;
+            res.set("width", 80)?;
+            res.set("height", 24)?;
+            Ok(res)
+        })?;
+
         let nvim_create_user_command = self.lua.create_function(|lua, (name, callback, _opts): (String, mlua::Value, mlua::Table)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -197,7 +217,10 @@ impl LuaEnv {
         api.set("nvim_buf_set_name", nvim_buf_set_name)?;
         api.set("nvim_buf_line_count", nvim_buf_line_count)?;
         api.set("nvim_buf_get_option", nvim_buf_get_option)?;
+        api.set("nvim_buf_set_option", nvim_buf_set_option)?;
+        api.set("nvim_win_set_option", nvim_win_set_option)?;
         api.set("nvim_win_get_buf", nvim_win_get_buf)?;
+        api.set("nvim_win_get_config", nvim_win_get_config)?;
         api.set("nvim_create_buf", nvim_create_buf)?;
         api.set("nvim_get_current_buf", nvim_get_current_buf)?;
         api.set("nvim_list_bufs", nvim_list_bufs)?;
@@ -258,6 +281,14 @@ impl LuaEnv {
         let keymap = self.lua.create_table()?;
         keymap.set("set", self.lua.create_function(|_, (_mode, _lhs, _rhs, _opts): (String, String, mlua::Value, mlua::Table)| { Ok(()) })?)?;
         vim.set("keymap", keymap)?;
+
+        let sender_clone_2 = sender.clone();
+        vim.set("cmd", self.lua.create_function(move |_, cmd: String| {
+            if let Some(s) = &sender_clone_2 {
+                let _ = s.send(Box::new(move |state| { let _ = crate::nvim::api::execute_cmd(state, &cmd); }));
+            }
+            Ok(())
+        })?)?;
 
         let fn_table = self.lua.create_table()?;
         fn_table.set("stdpath", self.lua.create_function(|_, name: String| {
@@ -453,12 +484,14 @@ impl LuaEnv {
         }
     }
 
-    pub fn call_user_command(&self, name: &str) -> Result<()> {
+    pub fn call_user_command(&self, name: &str, args: &str) -> Result<()> {
         if let Some(mut wrapper) = self.lua.app_data_mut::<StateWrapper>() {
             let state = unsafe { &*wrapper.0 };
             if let Some(key) = state.user_commands.get(name) {
                 let func: mlua::Function = self.lua.registry_value(key)?;
-                func.call::<()>(())?;
+                let arg_table = self.lua.create_table()?;
+                arg_table.set("args", args)?;
+                func.call::<()>(arg_table)?;
             }
         }
         Ok(())

@@ -102,7 +102,8 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
     let cmd_name = parts[0];
     if state.user_commands.contains_key(cmd_name) {
         let env = state.lua_env.clone();
-        let _ = env.borrow().call_user_command(cmd_name);
+        let args = if parts.len() > 1 { parts[1..].join(" ") } else { "".to_string() };
+        let _ = env.borrow().call_user_command(cmd_name, &args);
         return Ok(());
     }
 
