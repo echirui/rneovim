@@ -63,6 +63,7 @@ pub struct VimState {
     pub cmd_history_idx: Option<usize>,
     pub keymap: crate::nvim::keymap::KeymapEngine,
     pub quickfix_list: Vec<(String, usize, String)>, // (file, lnum, text)
+    pub globals: HashMap<String, String>, // Simple global variables for now
     pub quit: bool,
 }
 
@@ -203,6 +204,7 @@ impl VimState {
             cmd_history_idx: None,
             keymap: crate::nvim::keymap::KeymapEngine::new(),
             quickfix_list: Vec::new(),
+            globals: HashMap::new(),
             quit: false,
         }
     }

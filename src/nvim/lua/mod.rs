@@ -367,6 +367,34 @@ api.set("nvim_create_buf", nvim_create_buf)?;
         let _ = opt.set_metatable(Some(opt_meta));
         vim.set("opt", opt)?;
 
+        // vim.g implementation
+        let g = self.lua.create_table()?;
+        let g_meta = self.lua.create_table()?;
+        g_meta.set("__index", self.lua.create_function(|lua, (_table, name): (mlua::Table, String)| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(val) = state.globals.get(&name) {
+                    return Ok(mlua::Value::String(lua.create_string(val)?));
+                }
+            }
+            Ok(mlua::Value::Nil)
+        })?)?;
+        g_meta.set("__newindex", self.lua.create_function(|lua, (_table, name, value): (mlua::Table, String, mlua::Value)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                let val_str = match value {
+                    mlua::Value::String(s) => s.to_string_lossy().to_string(),
+                    mlua::Value::Boolean(b) => b.to_string(),
+                    mlua::Value::Integer(i) => i.to_string(),
+                    _ => "".to_string(),
+                };
+                state.globals.insert(name, val_str);
+            }
+            Ok(())
+        })?)?;
+        let _ = g.set_metatable(Some(g_meta));
+        vim.set("g", g)?;
+
         let loop_table = self.lua.create_table()?;
         loop_table.set("fs_stat", self.lua.create_function(|lua, path: String| {
             if std::path::Path::new(&path).exists() {
