@@ -84,7 +84,7 @@ impl LuaEnv {
                     return Ok(lines);
                 }
             }
-            Ok(Vec::new())
+            Ok(Vec::<String>::new())
         })?;
 
         let nvim_buf_set_lines = self.lua.create_function(|lua, (buf_id, start, end, _strict, lines): (i32, usize, i32, bool, Vec<String>)| {
@@ -171,13 +171,20 @@ impl LuaEnv {
             Ok(0)
         })?;
 
-        let nvim_buf_get_option = self.lua.create_function(|lua, (_buf, name): (i32, String)| {
-            match name.as_str() {
-                "filetype" => Ok(mlua::Value::String(lua.create_string("text")?)),
-                "buftype" => Ok(mlua::Value::String(lua.create_string("")?)),
-                "modifiable" => Ok(mlua::Value::Boolean(true)),
-                _ => Ok(mlua::Value::Nil),
+        let nvim_buf_get_option = self.lua.create_function(|lua, (buf_id, name): (i32, String)| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
+                    let b = buf_rc.borrow();
+                    match name.as_str() {
+                        "filetype" => return Ok(mlua::Value::String(lua.create_string("text")?)),
+                        "buftype" => return Ok(mlua::Value::String(lua.create_string("")?)),
+                        "modifiable" => return Ok(mlua::Value::Boolean(true)),
+                        _ => {}
+                    }
+                }
             }
+            Ok(mlua::Value::Nil)
         })?;
 
         let nvim_buf_set_option = self.lua.create_function(|_, (_buf, _name, _val): (i32, String, mlua::Value)| { Ok(()) })?;
@@ -491,7 +498,7 @@ impl LuaEnv {
                 let func: mlua::Function = self.lua.registry_value(key)?;
                 let arg_table = self.lua.create_table()?;
                 arg_table.set("args", args)?;
-                func.call::<()>(arg_table)?;
+                let _ = func.call::<()>(arg_table);
             }
         }
         Ok(())
