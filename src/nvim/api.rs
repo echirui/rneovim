@@ -830,10 +830,11 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
         "lua" => {
             if parts.len() > 1 {
                 let code = parts[1..].join(" ");
-                match state.lua_env.execute(&code) {
-                    Ok(res) => {
-                        if !res.is_empty() {
-                            state.set_cmdline(res);
+                let res = state.lua_env.borrow().execute(&code);
+                match res {
+                    Ok(val) => {
+                        if !val.is_empty() {
+                            state.set_cmdline(val);
                         }
                     }
                     Err(e) => {

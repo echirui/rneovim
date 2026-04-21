@@ -11,6 +11,8 @@ pub struct LuaEnv {
     lua: Lua,
 }
 
+struct StateWrapper(*mut VimState);
+
 impl LuaEnv {
     pub fn new() -> Self {
         let lua = Lua::new();
@@ -66,8 +68,60 @@ impl LuaEnv {
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
         api.set("nvim_set_decoration_provider", nvim_set_decoration_provider)?;
         api.set("nvim_command", nvim_command)?;
+
+        let nvim_list_runtime_paths = self.lua.create_function(|lua, _: ()| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") {
+                    let paths: Vec<String> = rtp.split(',').map(|s| s.to_string()).collect();
+                    return Ok(paths);
+                }
+            }
+            Ok(Vec::new())
+        })?;
+
+        let nvim_get_option = self.lua.create_function(|lua, name: String| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(val) = state.options.get(&name) {
+                    match val {
+                        crate::nvim::state::OptionValue::Bool(b) => return Ok(mlua::Value::Boolean(*b)),
+                        crate::nvim::state::OptionValue::Int(i) => return Ok(mlua::Value::Integer(*i)),
+                        crate::nvim::state::OptionValue::String(s) => return Ok(mlua::Value::String(lua.create_string(s)?)),
+                    }
+                }
+            }
+            Ok(mlua::Value::Nil)
+        })?;
+
+        api.set("nvim_list_runtime_paths", nvim_list_runtime_paths)?;
+        api.set("nvim_get_option", nvim_get_option)?;
+
         vim.set("api", api)?;
         vim.set("cmd", cmd_alias)?;
+
+        let fn_table = self.lua.create_table()?;
+        let stdpath = self.lua.create_function(|_, name: String| {
+            match name.as_str() {
+                "config" => Ok(dirs::config_dir().unwrap_or_default().join("rneovim").to_string_lossy().to_string()),
+                "data" => Ok(dirs::data_dir().unwrap_or_default().join("rneovim").to_string_lossy().to_string()),
+                "cache" => Ok(dirs::cache_dir().unwrap_or_default().join("rneovim").to_string_lossy().to_string()),
+                _ => Ok("".to_string()),
+            }
+        })?;
+        fn_table.set("stdpath", stdpath)?;
+        
+        let expand = self.lua.create_function(|_, path: String| {
+            if path.starts_with('~') {
+                if let Some(home) = dirs::home_dir() {
+                    return Ok(path.replace('~', &home.to_string_lossy()));
+                }
+            }
+            Ok(path)
+        })?;
+        fn_table.set("expand", expand)?;
+        vim.set("fn", fn_table)?;
+
         globals.set("vim", vim)?;
         Ok(())
     }
@@ -91,10 +145,20 @@ impl LuaEnv {
         self.execute(&code)
     }
 
-    pub fn load_plugins(&self, config_dir: Option<std::path::PathBuf>) {
+    pub fn load_plugins(&self, state: &mut VimState, config_dir: Option<std::path::PathBuf>) {
+        self.lua.set_app_data(StateWrapper(state as *mut VimState));
+
         let base_dir = config_dir.or_else(|| dirs::config_dir()).unwrap_or_else(|| std::path::PathBuf::from("."));
         let rneovim_dir = base_dir.join("rneovim");
         
+        // Ensure standard paths exist
+        if let Some(data) = dirs::data_dir() {
+            let lazy_path = data.join("rneovim/lazy");
+            if !lazy_path.exists() {
+                let _ = std::fs::create_dir_all(&lazy_path);
+            }
+        }
+
         // Source init.lua
         let init_lua = rneovim_dir.join("init.lua");
         if init_lua.exists() {

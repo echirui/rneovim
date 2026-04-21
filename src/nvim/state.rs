@@ -19,7 +19,7 @@ pub struct VimState {
     pub tabpages: Vec<TabPage>,
     pub current_tab_idx: usize,
     pub eval_context: EvalContext,
-    pub lua_env: LuaEnv,
+    pub lua_env: Rc<RefCell<LuaEnv>>,
     pub visual_anchor: Option<Cursor>,
     pub last_visual_anchor: Option<Cursor>,
     pub last_visual_cursor: Option<Cursor>,
@@ -145,13 +145,23 @@ impl VimState {
         options.insert("statusline".to_string(), OptionValue::String("%f %m %y [%L lines]".to_string()));
         options.insert("signcolumn".to_string(), OptionValue::String("auto".to_string()));
         
+        let mut rtp = Vec::new();
+        if let Some(config) = dirs::config_dir() {
+            rtp.push(config.join("rneovim").to_string_lossy().to_string());
+        }
+        if let Some(data) = dirs::data_dir() {
+            rtp.push(data.join("rneovim/site").to_string_lossy().to_string());
+        }
+        // TODO: add system paths
+        options.insert("runtimepath".to_string(), OptionValue::String(rtp.join(",")));
+        
         Self {
             mode: Mode::Normal,
             buffers: vec![Rc::clone(&buf)],
             tabpages: vec![tabpage],
             current_tab_idx: 0,
             eval_context: EvalContext::new(),
-            lua_env: LuaEnv::new(),
+            lua_env: Rc::new(RefCell::new(LuaEnv::new())),
             visual_anchor: None,
             last_visual_anchor: None,
             last_visual_cursor: None,
@@ -245,7 +255,7 @@ impl VimState {
             if let Some(line) = b.get_line(lnum) {
                 {
                     let is_current_line = lnum == win_cursor.row;
-                    self.lua_env.trigger_on_line();
+                    self.lua_env.borrow().trigger_on_line();
                     let mut current_offset = 0;
                     if show_signcolumn {
                         if let Some(sign) = b.get_sign(lnum) { self.grid.put_str(row, current_offset, sign, Color::Red, Color::Default, true); }
@@ -386,11 +396,12 @@ impl VimState {
     pub fn quit(&mut self) { self.quit = true; }
     pub fn should_quit(&self) -> bool { self.quit }
 
-    pub fn init_plugins(&self) {
-        if let Err(e) = self.lua_env.register_api(self.buffers.clone(), self.sender.clone()) {
+    pub fn init_plugins(&mut self) {
+        let env = self.lua_env.clone();
+        if let Err(e) = env.borrow().register_api(self.buffers.clone(), self.sender.clone()) {
             eprintln!("Failed to register Lua API: {}", e);
         }
-        self.lua_env.load_plugins(None);
+        env.borrow().load_plugins(self, None);
     }
 
     pub fn buffers(&self) -> &Vec<Rc<RefCell<Buffer>>> { &self.buffers }
