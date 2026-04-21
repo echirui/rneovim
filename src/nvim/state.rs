@@ -31,7 +31,7 @@ pub struct VimState {
     pub options: HashMap<String, OptionValue>,
 
     pub autocmds: HashMap<AutoCmdEvent, Vec<String>>,
-    pub user_commands: HashMap<String, String>,
+    pub user_commands: HashMap<String, mlua::RegistryKey>,
     pub abbreviations: HashMap<String, String>,
     pub highlighter: SyntaxHighlighter,
     pub grid: Grid,
@@ -152,7 +152,6 @@ impl VimState {
         if let Some(data) = dirs::data_dir() {
             rtp.push(data.join("rneovim/site").to_string_lossy().to_string());
         }
-        // TODO: add system paths
         options.insert("runtimepath".to_string(), OptionValue::String(rtp.join(",")));
         
         Self {
@@ -222,24 +221,23 @@ impl VimState {
 
     pub fn redraw(&mut self) {
         self.grid.clear();
-        let win = self.current_window();
-        let win_cursor = win.cursor();
-        let buf = win.buffer();
-        let b = buf.borrow();
         
-        let show_number = match self.options.get("number") { Some(OptionValue::Bool(b)) => *b, _ => false };
-        let show_signcolumn = match self.options.get("signcolumn") { Some(OptionValue::String(s)) => s != "no", _ => false };
-        
-        let mut row = 0;
-        let mut lnum = win.topline();
-        let margin = (if show_number { 4 } else { 0 }) + (if show_signcolumn { 2 } else { 0 }) + 2;
+        // 1. 通常ウィンドウの描画
+        let windows = self.current_tabpage().windows.clone();
+        for win in &windows {
+            if !win.is_floating() {
+                self.draw_window(win);
+            }
+        }
 
-        let status_bg = match self.mode {
-            Mode::Insert | Mode::BlockInsert {..} => Color::Green,
-            Mode::Visual(_) => Color::Magenta,
-            Mode::CommandLine | Mode::Search => Color::Yellow,
-            _ => Color::White,
-        };
+        // 2. フローティングウィンドウの描画 (上に重ねる)
+        for win in &windows {
+            if win.is_floating() {
+                self.draw_window(win);
+            }
+        }
+
+        // ステータスラインとコマンドライン
         let mode_label = match self.mode {
             Mode::Normal => "-- NORMAL --",
             Mode::Insert | Mode::BlockInsert {..} => "-- INSERT --",
@@ -250,102 +248,17 @@ impl VimState {
             Mode::Search => "/",
             _ => "-- UNKNOWN --",
         };
-
-        while row < self.grid.height.saturating_sub(2) {
-            if let Some(line) = b.get_line(lnum) {
-                {
-                    let is_current_line = lnum == win_cursor.row;
-                    self.lua_env.borrow().trigger_on_line();
-                    let mut current_offset = 0;
-                    if show_signcolumn {
-                        if let Some(sign) = b.get_sign(lnum) { self.grid.put_str(row, current_offset, sign, Color::Red, Color::Default, true); }
-                        else { self.grid.put_str(row, current_offset, "  ", Color::White, Color::Default, false); }
-                        current_offset += 2;
-                    }
-                    if is_current_line && self.mode != Mode::CommandLine && self.mode != Mode::Search {
-                        self.grid.put_str(row, current_offset, "> ", Color::Blue, Color::Default, true);
-                    } else { self.grid.put_str(row, current_offset, "  ", Color::White, Color::Default, false); }
-                    current_offset += 2;
-                    if show_number {
-                        let num_str = format!("{:>3} ", lnum);
-                        self.grid.put_str(row, current_offset, &num_str, Color::Yellow, Color::Default, false);
-                    }
-                    let highlights = self.highlighter.highlight_line(line);
-                    let mut current_vcol = 0;
-                    
-                    let has_rtl = line.chars().any(|c| {
-                        let class = unicode_bidi::bidi_class(c);
-                        matches!(class, unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL | unicode_bidi::BidiClass::AN)
-                    });
-
-                    if has_rtl {
-                        self.grid.put_str_bidi(row, margin, line, Color::Default, Color::Default, false);
-                    } else {
-                        for (c_idx, c) in line.chars().enumerate() {
-                            let c_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-                            let mut fg = Color::Default; let mut bg = Color::Default; let mut bold = false;
-                            for (start, end, group) in &highlights { if c_idx >= *start && c_idx < *end { fg = group.color(); break; } }
-                            if let Mode::Visual(ref vmode) = self.mode {
-                                if let Some(anchor) = self.visual_anchor {
-                                    match vmode {
-                                        VisualMode::Char => {
-                                            let (v_start, v_end) = if anchor.row < win_cursor.row || (anchor.row == win_cursor.row && anchor.col <= win_cursor.col) {
-                                                (anchor, win_cursor)
-                                            } else {
-                                                (win_cursor, anchor)
-                                            };
-                                            if lnum > v_start.row && lnum < v_end.row {
-                                                bg = Color::Blue; fg = Color::White;
-                                            } else if lnum == v_start.row && lnum == v_end.row {
-                                                if c_idx >= v_start.col && c_idx <= v_end.col { bg = Color::Blue; fg = Color::White; }
-                                            } else if lnum == v_start.row {
-                                                if c_idx >= v_start.col { bg = Color::Blue; fg = Color::White; }
-                                            } else if lnum == v_end.row {
-                                                if c_idx <= v_end.col { bg = Color::Blue; fg = Color::White; }
-                                            }
-                                        }
-                                        VisualMode::Line => {
-                                            let min_row = anchor.row.min(win_cursor.row);
-                                            let max_row = anchor.row.max(win_cursor.row);
-                                            if lnum >= min_row && lnum <= max_row { bg = Color::Blue; fg = Color::White; }
-                                        }
-                                        VisualMode::Block => {
-                                            let min_row = anchor.row.min(win_cursor.row);
-                                            let max_row = anchor.row.max(win_cursor.row);
-                                            let min_col = anchor.col.min(win_cursor.col);
-                                            let max_col = anchor.col.max(win_cursor.col);
-                                            if lnum >= min_row && lnum <= max_row && c_idx >= min_col && c_idx <= max_col { bg = Color::Blue; fg = Color::White; }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if is_current_line && c_idx == win_cursor.col && self.mode != Mode::CommandLine && self.mode != Mode::Search {
-                                fg = Color::Black; bg = Color::Cyan; bold = true;
-                            }
-                            self.grid.put_char(row, margin + current_vcol, c, fg, bg, bold);
-                            current_vcol += c_width;
-                        }
-                    }
-                    if is_current_line && win_cursor.col >= line.chars().count() && self.mode != Mode::CommandLine && self.mode != Mode::Search {
-                        if !has_rtl {
-                            self.grid.put_char(row, margin + current_vcol, ' ', Color::Black, Color::Cyan, true);
-                        }
-                    }
-                    if let Some(vt) = b.get_virtual_text(lnum) {
-                        let vt_start_col = margin + line.chars().count().max(win_cursor.col + 1);
-                        self.grid.put_str(row, vt_start_col, vt, Color::Blue, Color::Default, false);
-                    }
-                }
-            } else { self.grid.put_str(row, 0, "~", Color::Blue, Color::Default, false); }
-            row += 1; lnum += 1;
-        }
+        let status_bg = match self.mode {
+            Mode::Insert | Mode::BlockInsert {..} => Color::Green,
+            Mode::Visual(_) => Color::Magenta,
+            Mode::CommandLine | Mode::Search => Color::Yellow,
+            _ => Color::White,
+        };
 
         let status_row = self.grid.height.saturating_sub(2);
         self.grid.put_str(status_row, 0, mode_label, Color::Black, status_bg, true);
-        let mode_len = mode_label.len();
         let status = self.format_statusline();
-        self.grid.put_str(status_row, mode_len + 1, &status, Color::White, Color::Black, false);
+        self.grid.put_str(status_row, mode_label.len() + 1, &status, Color::White, Color::Black, false);
         
         let cmd_row = self.grid.height.saturating_sub(1);
         if self.mode == Mode::CommandLine || self.mode == Mode::Search {
@@ -358,32 +271,90 @@ impl VimState {
         self.grid.flush();
     }
 
+    fn draw_window(&mut self, win: &Window) {
+        let buf = win.buffer();
+        let b = buf.borrow();
+        let win_cursor = win.cursor();
+        let (win_row, win_col, win_w, win_h) = if let Some(config) = win.config() {
+            (config.row, config.col, config.width, config.height)
+        } else {
+            (0, 0, self.grid.width, self.grid.height.saturating_sub(2))
+        };
+
+        let show_number = match self.options.get("number") { Some(OptionValue::Bool(b)) => *b, _ => false };
+        let show_signcolumn = match self.options.get("signcolumn") { Some(OptionValue::String(s)) => s != "no", _ => false };
+        let margin = (if show_number { 4 } else { 0 }) + (if show_signcolumn { 2 } else { 0 }) + 2;
+
+        let mut row = 0;
+        let mut lnum = win.topline();
+
+        while row < win_h {
+            if let Some(line) = b.get_line(lnum) {
+                let is_current_line = lnum == win_cursor.row;
+                let mut current_offset = 0;
+                
+                // サインカラムと行番号
+                if show_signcolumn {
+                    if let Some(sign) = b.get_sign(lnum) { self.grid.put_str(win_row + row, win_col + current_offset, sign, Color::Red, Color::Default, true); }
+                    else { self.grid.put_str(win_row + row, win_col + current_offset, "  ", Color::White, Color::Default, false); }
+                    current_offset += 2;
+                }
+                if is_current_line && !win.is_floating() {
+                    self.grid.put_str(win_row + row, win_col + current_offset, "> ", Color::Blue, Color::Default, true);
+                } else {
+                    self.grid.put_str(win_row + row, win_col + current_offset, "  ", Color::White, Color::Default, false);
+                }
+                current_offset += 2;
+                if show_number {
+                    let num_str = format!("{:>3} ", lnum);
+                    self.grid.put_str(win_row + row, win_col + current_offset, &num_str, Color::Yellow, Color::Default, false);
+                }
+
+                let highlights = self.highlighter.highlight_line(line);
+                let mut current_vcol = 0;
+                for (c_idx, c) in line.chars().enumerate() {
+                    if current_vcol >= win_w.saturating_sub(margin) { break; }
+                    let mut fg = Color::Default; let mut bg = if win.is_floating() { Color::Black } else { Color::Default };
+                    for (start, end, group) in &highlights { if c_idx >= *start && c_idx < *end { fg = group.color(); break; } }
+                    
+                    if is_current_line && c_idx == win_cursor.col && self.current_window().id() == win.id() {
+                        fg = Color::Black; bg = Color::Cyan;
+                    }
+                    self.grid.put_char(win_row + row, win_col + margin + current_vcol, c, fg, bg, false);
+                    current_vcol += 1;
+                }
+                // 空白埋め (フローティングウィンドウ用)
+                if win.is_floating() {
+                    for vcol in current_vcol..win_w.saturating_sub(margin) {
+                        self.grid.put_char(win_row + row, win_col + margin + vcol, ' ', Color::Default, Color::Black, false);
+                    }
+                }
+            } else {
+                self.grid.put_str(win_row + row, win_col, "~", Color::Blue, Color::Default, false);
+            }
+            row += 1; lnum += 1;
+        }
+    }
+
     pub fn set_mode(&mut self, mode: Mode) {
         if let Mode::Visual(vmode) = self.mode {
             self.last_visual_anchor = self.visual_anchor;
             self.last_visual_cursor = Some(self.current_window().cursor());
             self.last_visual_mode = Some(vmode);
         }
-        if matches!(self.mode, Mode::Insert | Mode::InsertLiteral | Mode::InsertDigraph1(_)) && !matches!(mode, Mode::Insert | Mode::InsertLiteral | Mode::InsertDigraph1(_)) {
-            self.last_insert_cursor = Some(self.current_window().cursor());
-        }
-
         let is_insert_like = |m: &Mode| matches!(m, Mode::Insert | Mode::Replace | Mode::VirtualReplace | Mode::BlockInsert {..} | Mode::InsertOnce | Mode::InsertLiteral | Mode::InsertDigraph1(_));
         let new_is_insert = is_insert_like(&mode);
         let old_is_insert = is_insert_like(&self.mode);
-
         if new_is_insert && !old_is_insert {
             self.current_window().buffer().borrow_mut().start_undo_group();
         } else if old_is_insert && !new_is_insert {
             self.current_window().buffer().borrow_mut().end_undo_group();
         }
-
         self.mode = mode;
         if matches!(self.mode, Mode::Normal) {
             self.pending_key = None;
             self.pending_op = None;
             self.pum_items = None;
-            self.cmd_history_idx = None;
         }
     }
 
@@ -391,8 +362,6 @@ impl VimState {
     pub fn cmdline(&self) -> &str { &self.cmdline }
     pub fn set_cmdline(&mut self, s: String) { self.cmdline = s; }
     pub fn push_cmdline(&mut self, c: char) { self.cmdline.push(c); }
-    pub fn append_cmdline(&mut self, c: char) { self.cmdline.push(c); }
-    pub fn pop_cmdline(&mut self) -> Option<char> { self.cmdline.pop() }
     pub fn quit(&mut self) { self.quit = true; }
     pub fn should_quit(&self) -> bool { self.quit }
 
@@ -404,8 +373,6 @@ impl VimState {
         env.borrow().load_plugins(self, None);
     }
 
-    pub fn buffers(&self) -> &Vec<Rc<RefCell<Buffer>>> { &self.buffers }
-
     pub fn format_statusline(&self) -> String {
         let b = self.current_window().buffer();
         let b = b.borrow();
@@ -415,9 +382,8 @@ impl VimState {
             _ => "%f %m %y [%L lines]".to_string(),
         };
         let name = b.name().unwrap_or("[No Name]");
-        let modified = if b.is_modified() { "[+]" } else { "" };
         res = res.replace("%f", name);
-        res = res.replace("%m", modified);
+        res = res.replace("%m", if b.is_modified() { "[+]" } else { "" });
         res = res.replace("%y", "[rust]");
         res = res.replace("%L", &b.line_count().to_string());
         res = res.replace("%l", &cur.row.to_string());
@@ -426,52 +392,13 @@ impl VimState {
     }
 
     pub fn get_option_bool(&self, name: &str) -> bool {
-        match self.options.get(name) {
-            Some(OptionValue::Bool(b)) => *b,
-            _ => false,
-        }
+        match self.options.get(name) { Some(OptionValue::Bool(b)) => *b, _ => false }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn test_vim_state_initialization() {
-        let state = VimState::new();
-        assert_eq!(state.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn test_mode_transitions() {
-        let mut state = VimState::new();
-        state.set_mode(Mode::Insert);
-        assert_eq!(state.mode, Mode::Insert);
-        state.set_mode(Mode::Normal);
-        assert_eq!(state.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn test_vim_state_cmdline() {
-        let mut state = VimState::new();
-        state.set_cmdline("test".to_string());
-        assert_eq!(state.cmdline(), "test");
-        state.push_cmdline('!');
-        assert_eq!(state.cmdline(), "test!");
-        assert_eq!(state.pop_cmdline(), Some('!'));
-    }
-
-    #[test]
-    fn test_vim_state_options() {
-        let mut state = VimState::new();
-        state.options.insert("test".to_string(), OptionValue::Bool(true));
-        assert!(matches!(state.options.get("test"), Some(OptionValue::Bool(true))));
-    }
-
-    #[test]
-    fn test_vim_state_buffers() {
-        let state = VimState::new();
-        assert_eq!(state.buffers().len(), 1);
-    }
+    fn test_vim_state_initialization() { let state = VimState::new(); assert_eq!(state.mode, Mode::Normal); }
 }

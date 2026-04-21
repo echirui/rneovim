@@ -78,6 +78,8 @@ impl Window {
     pub fn set_height(&mut self, h: usize) { self.height = h; }
     pub fn set_width(&mut self, w: usize) { self.width = w; }
     pub fn buffer(&self) -> Rc<RefCell<Buffer>> { Rc::clone(&self.buffer) }
+    pub fn config(&self) -> Option<&WinConfig> { self.config.as_ref() }
+    pub fn is_floating(&self) -> bool { self.config.is_some() }
 
     pub fn set_cursor(&mut self, row: usize, col: usize) {
         self.cursor = Cursor { row, col };
