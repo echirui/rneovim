@@ -305,6 +305,10 @@ impl LuaEnv {
             Ok(())
         })?;
 
+        let nvim_get_all_options_info = self.lua.create_function(|lua, _: ()| {
+            Ok(lua.create_table()?)
+        })?;
+
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
         api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
         api.set("nvim_buf_set_name", nvim_buf_set_name)?;
@@ -337,6 +341,7 @@ impl LuaEnv {
         api.set("nvim_list_uis", nvim_list_uis)?;
         api.set("nvim_get_vvar", nvim_get_vvar)?;
         api.set("nvim_set_hl", nvim_set_hl)?;
+        api.set("nvim_get_all_options_info", nvim_get_all_options_info)?;
 
         let nvim_list_runtime_paths = self.lua.create_function(|lua, _: ()| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
@@ -453,6 +458,12 @@ impl LuaEnv {
                     Ok(out)
                 }
                 Err(e) => Ok(format!("Error: {}", e)),
+            }
+        })?)?;
+        fn_table.set("has", self.lua.create_function(|_, name: String| {
+            match name.as_str() {
+                "nvim-0.9.0" | "nvim-0.8.0" | "nvim" => Ok(true),
+                _ => Ok(false),
             }
         })?)?;
         vim.set("fn", fn_table)?;
