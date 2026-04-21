@@ -102,6 +102,7 @@ fn main() {
     state.redraw();
 
     state.init_plugins();
+    rneovim::nvim::api::trigger_autocmd(&mut state, rneovim::nvim::state::AutoCmdEvent::VimEnter);
     state.redraw();
 
     let sender_clone = sender.clone();
