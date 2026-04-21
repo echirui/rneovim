@@ -395,6 +395,38 @@ api.set("nvim_create_buf", nvim_create_buf)?;
         let _ = g.set_metatable(Some(g_meta));
         vim.set("g", g)?;
 
+        // vim.go implementation
+        let go = self.lua.create_table()?;
+        let go_meta = self.lua.create_table()?;
+        go_meta.set("__index", self.lua.create_function(|lua, (_table, name): (mlua::Table, String)| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(val) = state.options.get(&name) {
+                    match val {
+                        crate::nvim::state::OptionValue::Bool(b) => return Ok(mlua::Value::Boolean(*b)),
+                        crate::nvim::state::OptionValue::Int(i) => return Ok(mlua::Value::Integer(*i)),
+                        crate::nvim::state::OptionValue::String(s) => return Ok(mlua::Value::String(lua.create_string(s)?)),
+                    }
+                }
+            }
+            Ok(mlua::Value::Nil)
+        })?)?;
+        go_meta.set("__newindex", self.lua.create_function(|lua, (_table, name, value): (mlua::Table, String, mlua::Value)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                let val = match value {
+                    mlua::Value::Boolean(b) => crate::nvim::state::OptionValue::Bool(b),
+                    mlua::Value::Integer(i) => crate::nvim::state::OptionValue::Int(i),
+                    mlua::Value::String(s) => crate::nvim::state::OptionValue::String(s.to_string_lossy().to_string()),
+                    _ => return Ok(()),
+                };
+                state.options.insert(name, val);
+            }
+            Ok(())
+        })?)?;
+        let _ = go.set_metatable(Some(go_meta));
+        vim.set("go", go)?;
+
         let loop_table = self.lua.create_table()?;
         loop_table.set("fs_stat", self.lua.create_function(|lua, path: String| {
             if std::path::Path::new(&path).exists() {
