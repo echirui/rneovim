@@ -164,20 +164,32 @@ impl LuaEnv {
             }
             Ok(())
         })?;
+// nvim_get_mode
+let nvim_get_mode = self.lua.create_function(|lua, _: ()| {
+    let res = lua.create_table()?;
+    res.set("mode", "n")?;
+    res.set("blocking", false)?;
+    Ok(res)
+})?;
 
-        let nvim_get_mode = self.lua.create_function(|lua, _: ()| {
-            let res = lua.create_table()?;
-            res.set("mode", "n")?;
-            res.set("blocking", false)?;
-            Ok(res)
-        })?;
+// nvim_buf_line_count
+let nvim_buf_line_count = self.lua.create_function(|lua, buf_id: i32| {
+    if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+        let state = unsafe { &*wrapper.0 };
+        if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
+            return Ok(buf_rc.borrow().line_count());
+        }
+    }
+    Ok(0)
+})?;
 
-        let nvim_create_namespace = self.lua.create_function(|_, _name: String| { Ok(1) })?;
+let nvim_create_namespace = self.lua.create_function(|_, _name: String| { Ok(1) })?;
 
-        api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
-        api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
-        api.set("nvim_buf_set_name", nvim_buf_set_name)?;
-        api.set("nvim_create_buf", nvim_create_buf)?;
+api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
+api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
+api.set("nvim_buf_set_name", nvim_buf_set_name)?;
+api.set("nvim_buf_line_count", nvim_buf_line_count)?;
+api.set("nvim_create_buf", nvim_create_buf)?;
         api.set("nvim_get_current_buf", nvim_get_current_buf)?;
         api.set("nvim_list_bufs", nvim_list_bufs)?;
         api.set("nvim_open_win", nvim_open_win)?;
@@ -363,6 +375,22 @@ impl LuaEnv {
                 Ok(mlua::Value::Table(table))
             } else { Ok(mlua::Value::Nil) }
         })?)?;
+
+        loop_table.set("hrtime", self.lua.create_function(|_, _: ()| {
+            Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64)
+        })?)?;
+
+        loop_table.set("cwd", self.lua.create_function(|_, _: ()| {
+            Ok(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string())
+        })?)?;
+
+        loop_table.set("os_uname", self.lua.create_function(|lua, _: ()| {
+            let table = lua.create_table()?;
+            table.set("sysname", std::env::consts::OS)?;
+            table.set("machine", std::env::consts::ARCH)?;
+            Ok(table)
+        })?)?;
+
         vim.set("loop", &loop_table)?;
         vim.set("uv", loop_table)?;
 
