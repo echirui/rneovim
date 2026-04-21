@@ -317,9 +317,9 @@ impl LuaEnv {
         vim.set("opt", opt)?;
 
         let loop_table = self.lua.create_table()?;
-        loop_table.set("fs_stat", self.lua.create_function(|_, path: String| {
+        loop_table.set("fs_stat", self.lua.create_function(|lua, path: String| {
             if std::path::Path::new(&path).exists() {
-                let table = mlua::Lua::new().create_table()?;
+                let table = lua.create_table()?;
                 table.set("type", "directory")?;
                 Ok(mlua::Value::Table(table))
             } else { Ok(mlua::Value::Nil) }
