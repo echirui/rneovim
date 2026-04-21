@@ -94,8 +94,41 @@ impl LuaEnv {
             Ok(mlua::Value::Nil)
         })?;
 
+        let nvim_set_option = self.lua.create_function(|lua, (name, value): (String, mlua::Value)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                let val = match value {
+                    mlua::Value::Boolean(b) => crate::nvim::state::OptionValue::Bool(b),
+                    mlua::Value::Integer(i) => crate::nvim::state::OptionValue::Int(i),
+                    mlua::Value::String(s) => crate::nvim::state::OptionValue::String(s.to_string_lossy().to_string()),
+                    _ => return Ok(()),
+                };
+                state.options.insert(name, val);
+            }
+            Ok(())
+        })?;
+
+        let nvim_get_runtime_file = self.lua.create_function(|lua, (name, all): (String, bool)| {
+            let mut results = Vec::new();
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") {
+                    for path in rtp.split(',') {
+                        let full_path = std::path::Path::new(path).join(&name);
+                        if full_path.exists() {
+                            results.push(full_path.to_string_lossy().to_string());
+                            if !all { break; }
+                        }
+                    }
+                }
+            }
+            Ok(results)
+        })?;
+
         api.set("nvim_list_runtime_paths", nvim_list_runtime_paths)?;
         api.set("nvim_get_option", nvim_get_option)?;
+        api.set("nvim_set_option", nvim_set_option)?;
+        api.set("nvim_get_runtime_file", nvim_get_runtime_file)?;
 
         vim.set("api", api)?;
         vim.set("cmd", cmd_alias)?;
@@ -120,7 +153,69 @@ impl LuaEnv {
             Ok(path)
         })?;
         fn_table.set("expand", expand)?;
+
+        let system = self.lua.create_function(|_, args: mlua::Value| {
+            let mut cmd_args = Vec::new();
+            match args {
+                mlua::Value::String(s) => cmd_args.push(s.to_string_lossy().to_string()),
+                mlua::Value::Table(t) => {
+                    for v in t.sequence_values::<String>() {
+                        if let Ok(arg) = v { cmd_args.push(arg); }
+                    }
+                }
+                _ => {}
+            }
+            if cmd_args.is_empty() { return Ok("".to_string()); }
+            let mut cmd = std::process::Command::new(&cmd_args[0]);
+            if cmd_args.len() > 1 { cmd.args(&cmd_args[1..]); }
+            match cmd.output() {
+                Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
+                Err(e) => Ok(format!("Error: {}", e)),
+            }
+        })?;
+        fn_table.set("system", system)?;
+
         vim.set("fn", fn_table)?;
+
+        // vim.opt implementation
+        let opt = self.lua.create_table()?;
+        let opt_meta = self.lua.create_table()?;
+        opt_meta.set("__index", self.lua.create_function(move |lua, (_table, name): (mlua::Table, String)| {
+            let inner_opt = lua.create_table()?;
+            
+            // prepend method
+            let name_clone_2 = name.clone();
+            inner_opt.set("prepend", lua.create_function(move |lua, value: String| {
+                if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                    let state = unsafe { &mut *wrapper.0 };
+                    if name_clone_2 == "rtp" || name_clone_2 == "runtimepath" {
+                        if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get_mut("runtimepath") {
+                            *rtp = format!("{},{}", value, rtp);
+                        }
+                    }
+                }
+                Ok(())
+            })?)?;
+            
+            Ok(inner_opt)
+        })?)?;
+        let _ = opt.set_metatable(Some(opt_meta));
+        vim.set("opt", opt)?;
+
+        let loop_table = self.lua.create_table()?;
+        let fs_stat = self.lua.create_function(|_, path: String| {
+            let p = std::path::Path::new(&path);
+            if p.exists() {
+                let table = mlua::Lua::new().create_table()?; // use dummy for now
+                table.set("type", "directory")?; // Simplified
+                Ok(mlua::Value::Table(table))
+            } else {
+                Ok(mlua::Value::Nil)
+            }
+        })?;
+        loop_table.set("fs_stat", fs_stat)?;
+        vim.set("loop", &loop_table)?;
+        vim.set("uv", loop_table)?;
 
         globals.set("vim", vim)?;
         Ok(())
