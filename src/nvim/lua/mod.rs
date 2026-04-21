@@ -35,12 +35,34 @@ impl LuaEnv {
         dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("rneovim")
     }
 
+    fn sync_package_path(lua: &Lua, rtp: &str) -> mlua::Result<()> {
+        let package: mlua::Table = lua.globals().get("package")?;
+        let mut path: String = package.get("path")?;
+        
+        for p in rtp.split(',') {
+            let lua_path1 = format!("{}/lua/?.lua", p);
+            let lua_path2 = format!("{}/lua/?/init.lua", p);
+            if !path.contains(&lua_path1) {
+                path = format!("{};{};{}", lua_path1, lua_path2, path);
+            }
+        }
+        package.set("path", path)?;
+        Ok(())
+    }
+
     pub fn register_api(&self, buffers: Vec<Rc<RefCell<Buffer>>>, sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
         let globals = self.lua.globals();
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
 
-        // print 関数
+        // 初期 rtp の同期
+        if let Some(mut wrapper) = self.lua.app_data_mut::<StateWrapper>() {
+            let state = unsafe { &*wrapper.0 };
+            if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") {
+                let _ = Self::sync_package_path(&self.lua, rtp);
+            }
+        }
+
         let print = self.lua.create_function(|lua, msg: String| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -50,7 +72,6 @@ impl LuaEnv {
         })?;
         globals.set("print", print)?;
 
-        // nvim_buf_get_lines
         let buffers_clone = buffers.clone();
         let nvim_buf_get_lines = self.lua.create_function(move |_, (buf_id, start, end, _): (i32, usize, i32, bool)| {
             if let Some(buf_rc) = buffers_clone.iter().find(|b| b.borrow().id() == buf_id) {
@@ -64,7 +85,6 @@ impl LuaEnv {
             } else { Ok(Vec::new()) }
         })?;
 
-        // nvim_buf_set_lines
         let nvim_buf_set_lines = self.lua.create_function(|lua, (buf_id, start, end, _strict, lines): (i32, usize, i32, bool, Vec<String>)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -78,7 +98,6 @@ impl LuaEnv {
             Ok(())
         })?;
 
-        // nvim_buf_set_name
         let nvim_buf_set_name = self.lua.create_function(|lua, (buf_id, name): (i32, String)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -89,7 +108,6 @@ impl LuaEnv {
             Ok(())
         })?;
 
-        // nvim_create_buf
         let nvim_create_buf = self.lua.create_function(|lua, (_listed, _scratch): (bool, bool)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -100,7 +118,6 @@ impl LuaEnv {
             Ok(0)
         })?;
 
-        // nvim_get_current_buf
         let nvim_get_current_buf = self.lua.create_function(|lua, _: ()| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -109,7 +126,6 @@ impl LuaEnv {
             Ok(0)
         })?;
 
-        // nvim_list_bufs
         let nvim_list_bufs = self.lua.create_function(|lua, _: ()| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -118,7 +134,6 @@ impl LuaEnv {
             Ok(Vec::new())
         })?;
 
-        // nvim_open_win
         let nvim_open_win = self.lua.create_function(|lua, (buf_id, enter, config): (i32, bool, mlua::Table)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -139,7 +154,6 @@ impl LuaEnv {
             Ok(0)
         })?;
 
-        // nvim_create_user_command
         let nvim_create_user_command = self.lua.create_function(|lua, (name, callback, _opts): (String, mlua::Value, mlua::Table)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -151,7 +165,6 @@ impl LuaEnv {
             Ok(())
         })?;
 
-        // nvim_get_mode
         let nvim_get_mode = self.lua.create_function(|lua, _: ()| {
             let res = lua.create_table()?;
             res.set("mode", "n")?;
@@ -159,7 +172,6 @@ impl LuaEnv {
             Ok(res)
         })?;
 
-        // nvim_create_namespace (Dummy)
         let nvim_create_namespace = self.lua.create_function(|_, _name: String| { Ok(1) })?;
 
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
@@ -206,7 +218,12 @@ impl LuaEnv {
                     mlua::Value::String(s) => crate::nvim::state::OptionValue::String(s.to_string_lossy().to_string()),
                     _ => return Ok(()),
                 };
-                state.options.insert(name, val);
+                state.options.insert(name.clone(), val.clone());
+                if name == "runtimepath" || name == "rtp" {
+                    if let crate::nvim::state::OptionValue::String(ref rtp) = val {
+                        let _ = Self::sync_package_path(lua, rtp);
+                    }
+                }
             }
             Ok(())
         })?;
@@ -243,7 +260,6 @@ impl LuaEnv {
 
         vim.set("api", api)?;
 
-        // vim.keymap.set (Dummy)
         let keymap = self.lua.create_table()?;
         keymap.set("set", self.lua.create_function(|_, (_mode, _lhs, _rhs, _opts): (String, String, mlua::Value, mlua::Table)| { Ok(()) })?)?;
         vim.set("keymap", keymap)?;
@@ -280,7 +296,11 @@ impl LuaEnv {
             let mut cmd = std::process::Command::new(&cmd_args[0]);
             if cmd_args.len() > 1 { cmd.args(&cmd_args[1..]); }
             match cmd.output() {
-                Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if output.status.success() { Ok(stdout) } else { Ok(format!("{} {}", stdout, stderr)) }
+                }
                 Err(e) => Ok(format!("Error: {}", e)),
             }
         })?)?;
@@ -288,29 +308,48 @@ impl LuaEnv {
 
         let opt = self.lua.create_table()?;
         let opt_meta = self.lua.create_table()?;
+        let lua_ref = self.lua.clone();
         opt_meta.set("__index", self.lua.create_function(move |lua, (_table, name): (mlua::Table, String)| {
             let inner_opt = lua.create_table()?;
             let name_clone = name.clone();
-            // prepend の引数を修正: (table, value) または (value) どちらでも動くように mlua::Value で受ける
+            let lua_clone = lua_ref.clone();
+            
+            // prepend
+            let name_p = name_clone.clone();
+            let lua_p = lua_clone.clone();
             inner_opt.set("prepend", lua.create_function(move |lua, args: mlua::MultiValue| {
-                let value = if args.len() >= 2 {
-                    // obj:prepend(val) の形式
-                    match args.get(1) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) }
-                } else {
-                    // obj.prepend(val) または obj:prepend() [エラー] の形式
-                    match args.get(0) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) }
-                };
-
+                let value = if args.len() >= 2 { match args.get(1) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } }
+                else { match args.get(0) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } };
                 if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                     let state = unsafe { &mut *wrapper.0 };
-                    if name_clone == "rtp" || name_clone == "runtimepath" {
+                    if name_p == "rtp" || name_p == "runtimepath" {
                         if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get_mut("runtimepath") {
                             *rtp = format!("{},{}", value, rtp);
+                            let _ = Self::sync_package_path(&lua_p, rtp);
                         }
                     }
                 }
                 Ok(())
             })?)?;
+
+            // append
+            let name_a = name_clone.clone();
+            let lua_a = lua_clone.clone();
+            inner_opt.set("append", lua.create_function(move |lua, args: mlua::MultiValue| {
+                let value = if args.len() >= 2 { match args.get(1) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } }
+                else { match args.get(0) { Some(mlua::Value::String(s)) => s.to_string_lossy().to_string(), _ => return Ok(()) } };
+                if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                    let state = unsafe { &mut *wrapper.0 };
+                    if name_a == "rtp" || name_a == "runtimepath" {
+                        if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get_mut("runtimepath") {
+                            *rtp = format!("{},{}", rtp, value);
+                            let _ = Self::sync_package_path(&lua_a, rtp);
+                        }
+                    }
+                }
+                Ok(())
+            })?)?;
+
             Ok(inner_opt)
         })?)?;
         let _ = opt.set_metatable(Some(opt_meta));
@@ -355,6 +394,12 @@ impl LuaEnv {
         let rneovim_config = config_dir.unwrap_or_else(Self::get_config_dir);
         let rneovim_data = Self::get_data_dir();
         if !rneovim_data.exists() { let _ = std::fs::create_dir_all(rneovim_data.join("lazy")); }
+        
+        // 初期パス同期
+        if let Some(crate::nvim::state::OptionValue::String(rtp)) = state.options.get("runtimepath") {
+            let _ = Self::sync_package_path(&self.lua, rtp);
+        }
+
         let init_lua = rneovim_config.join("init.lua");
         if init_lua.exists() {
             if let Err(e) = self.execute_file(&init_lua) {
@@ -377,7 +422,7 @@ impl LuaEnv {
 
     pub fn call_user_command(&self, name: &str) -> Result<()> {
         if let Some(mut wrapper) = self.lua.app_data_mut::<StateWrapper>() {
-            let state = unsafe { &mut *wrapper.0 };
+            let state = unsafe { &*wrapper.0 };
             if let Some(key) = state.user_commands.get(name) {
                 let func: mlua::Function = self.lua.registry_value(key)?;
                 func.call::<()>(())?;
