@@ -74,6 +74,16 @@ impl LuaEnv {
             }
             Ok(())
         })?;
+// nvim_buf_set_name
+let nvim_buf_set_name = self.lua.create_function(|lua, (buf_id, name): (i32, String)| {
+    if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+        let state = unsafe { &mut *wrapper.0 };
+        if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
+            buf_rc.borrow_mut().set_name(&name);
+        }
+    }
+    Ok(())
+})?;
 
         let nvim_create_buf = self.lua.create_function(|lua, (_listed, _scratch): (bool, bool)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
@@ -83,6 +93,22 @@ impl LuaEnv {
                 return Ok(buf.borrow().id());
             }
             Ok(0)
+        })?;
+
+        let nvim_get_current_buf = self.lua.create_function(|lua, _: ()| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                return Ok(state.current_window().buffer().borrow().id());
+            }
+            Ok(0)
+        })?;
+
+        let nvim_list_bufs = self.lua.create_function(|lua, _: ()| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                return Ok(state.buffers.iter().map(|b| b.borrow().id()).collect::<Vec<_>>());
+            }
+            Ok(Vec::new())
         })?;
 
         let nvim_open_win = self.lua.create_function(|lua, (buf_id, enter, config): (i32, bool, mlua::Table)| {
@@ -180,7 +206,10 @@ impl LuaEnv {
 
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
         api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
+        api.set("nvim_buf_set_name", nvim_buf_set_name)?;
         api.set("nvim_create_buf", nvim_create_buf)?;
+        api.set("nvim_get_current_buf", nvim_get_current_buf)?;
+        api.set("nvim_list_bufs", nvim_list_bufs)?;
         api.set("nvim_open_win", nvim_open_win)?;
         api.set("nvim_create_user_command", nvim_create_user_command)?;
         api.set("nvim_get_mode", nvim_get_mode)?;
