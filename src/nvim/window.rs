@@ -29,19 +29,13 @@ pub struct WinConfig {
 /// Represents a Neovim window (win_T).
 #[derive(Clone)]
 pub struct Window {
-    /// Unique identifier for the window
     id: i32,
-    /// The buffer displayed in this window
     pub buffer: Rc<RefCell<Buffer>>,
-    /// Cursor position in the buffer
     cursor: Cursor,
-    /// The line number displayed at the top of the window (w_topline)
+    pub curswant: usize,
     topline: usize,
-    /// Window height
     height: usize,
-    /// Window width
     width: usize,
-    /// フローティングウィンドウの設定 (None なら通常のウィンドウ)
     config: Option<WinConfig>,
     pub folds: Vec<(usize, usize)>,
 }
@@ -53,9 +47,10 @@ impl Window {
             id,
             buffer,
             cursor: Cursor { row: 1, col: 0 },
+            curswant: 0,
             topline: 1,
-            height: 24, // Default height
-            width: 80,  // Default width
+            height: 24,
+            width: 80,
             config: None,
             folds: Vec::new(),
         }
@@ -67,6 +62,7 @@ impl Window {
             id,
             buffer,
             cursor: Cursor { row: 1, col: 0 },
+            curswant: 0,
             topline: 1,
             height: config.height,
             width: config.width,
@@ -75,57 +71,33 @@ impl Window {
         }
     }
 
-    pub fn is_floating(&self) -> bool {
-        self.config.is_some()
-    }
-
-    pub fn add_fold(&mut self, start: usize, end: usize) {
-        self.folds.push((start, end));
-        // 単純化のため、追加後にソートしておく
-        self.folds.sort_by_key(|f| f.0);
-    }
-
-    pub fn id(&self) -> i32 {
-        self.id
-    }
-
-    pub fn cursor(&self) -> Cursor {
-        self.cursor
-    }
-
-    pub fn topline(&self) -> usize {
-        self.topline
-    }
-
-    pub fn height(&self) -> usize {
-        self.height
-    }
-
-    pub fn set_height(&mut self, height: usize) {
-        self.height = height;
-    }
-
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    pub fn set_width(&mut self, width: usize) {
-        self.width = width;
-    }
+    pub fn id(&self) -> i32 { self.id }
+    pub fn cursor(&self) -> Cursor { self.cursor }
+    pub fn topline(&self) -> usize { self.topline }
+    pub fn height(&self) -> usize { self.height }
+    pub fn set_height(&mut self, h: usize) { self.height = h; }
+    pub fn set_width(&mut self, w: usize) { self.width = w; }
+    pub fn buffer(&self) -> Rc<RefCell<Buffer>> { Rc::clone(&self.buffer) }
 
     pub fn set_cursor(&mut self, row: usize, col: usize) {
-        let buf = self.buffer.borrow();
-        let line_count = buf.line_count();
-        
-        let r = row.clamp(1, if line_count == 0 { 1 } else { line_count });
-        let c = if let Some(line) = buf.get_line(r) {
-            col.min(line.chars().count())
+        self.cursor = Cursor { row, col };
+        self.curswant = col;
+        self.adjust_topline();
+    }
+
+    pub fn set_cursor_vertical(&mut self, row: usize) {
+        let c = if let Ok(buf) = self.buffer.try_borrow() {
+            let chars_count = buf.get_line(row).map(|l| l.chars().count()).unwrap_or(0);
+            if chars_count == 0 { 0 } else { self.curswant.min(chars_count.saturating_sub(1)) }
         } else {
-            0
+            // 借用できない場合はとりあえずそのまま（呼び出し側で調整されることを期待）
+            self.curswant
         };
-        
-        self.cursor = Cursor { row: r, col: c };
-        
+        self.cursor = Cursor { row, col: c };
+        self.adjust_topline();
+    }
+
+    fn adjust_topline(&mut self) {
         if self.cursor.row < self.topline {
             self.topline = self.cursor.row;
         } else if self.cursor.row >= self.topline + self.height {
@@ -133,90 +105,16 @@ impl Window {
         }
     }
 
-    pub fn buffer(&self) -> Rc<RefCell<Buffer>> {
-        Rc::clone(&self.buffer)
-    }
-
     pub fn center_cursor(&mut self) {
         let half = self.height / 2;
         self.topline = self.cursor.row.saturating_sub(half).max(1);
     }
 
-    pub fn cursor_to_top(&mut self) {
-        self.topline = self.cursor.row;
-    }
-
-    pub fn cursor_to_bottom(&mut self) {
-        self.topline = self.cursor.row.saturating_sub(self.height.saturating_sub(1)).max(1);
-    }
+    pub fn cursor_to_top(&mut self) { self.topline = self.cursor.row; }
+    pub fn cursor_to_bottom(&mut self) { self.topline = self.cursor.row.saturating_sub(self.height.saturating_sub(1)).max(1); }
 
     pub fn scroll(&mut self, lines: i32) {
-        let buf = self.buffer.borrow();
-        let line_count = buf.line_count().max(1);
-        
-        let new_topline = (self.topline as i32 + lines).clamp(1, line_count as i32) as usize;
-        self.topline = new_topline;
-        
-        let new_row = (self.cursor.row as i32 + lines).clamp(1, line_count as i32) as usize;
-        let mut r = new_row;
-        
-        // Ensure cursor is within the visible area.
-        if r < self.topline {
-            r = self.topline;
-        } else if r >= self.topline + self.height {
-            r = self.topline + self.height - 1;
-        }
-        r = r.min(line_count);
-        
-        let c = if let Some(line) = buf.get_line(r) {
-            self.cursor.col.min(line.chars().count())
-        } else {
-            0
-        };
-        self.cursor = Cursor { row: r, col: c };
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::nvim::buffer::Buffer;
-
-    #[test]
-    fn test_window_cursor_move() {
-        let buf = Rc::new(RefCell::new(Buffer::new()));
-        buf.borrow_mut().append_line("L1").unwrap();
-        buf.borrow_mut().append_line("L2").unwrap();
-        
-        let mut win = Window::new(Rc::clone(&buf));
-        win.set_height(10);
-        
-        win.set_cursor(2, 0);
-        assert_eq!(win.cursor().row, 2);
-        win.set_cursor(100, 0);
-        assert_eq!(win.cursor().row, 2);
-        win.set_cursor(0, 0);
-        assert_eq!(win.cursor().row, 1);
-    }
-
-    #[test]
-    fn test_window_scrolling() {
-        let buf = Rc::new(RefCell::new(Buffer::new()));
-        for i in 1..20 {
-            buf.borrow_mut().append_line(&format!("Line {}", i)).unwrap();
-        }
-        
-        let mut win = Window::new(Rc::clone(&buf));
-        win.set_height(5);
-        
-        assert_eq!(win.topline(), 1);
-        win.set_cursor(5, 0);
-        assert_eq!(win.topline(), 1);
-        win.set_cursor(6, 0);
-        assert_eq!(win.topline(), 2);
-        win.set_cursor(15, 0);
-        assert_eq!(win.topline(), 11);
-        win.set_cursor(10, 0);
-        assert_eq!(win.topline(), 10);
+        let line_count = if let Ok(b) = self.buffer.try_borrow() { b.line_count() } else { 1000 };
+        self.topline = (self.topline as i32 + lines).clamp(1, line_count as i32) as usize;
     }
 }

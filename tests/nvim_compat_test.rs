@@ -142,6 +142,16 @@ fn test_delete_char_count() {
 }
 
 #[test]
+fn test_cursor_restore_vertical_move() {
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // $: end of line 1
+    // j: down to line 2 (shorter/empty)
+    // k: up back to line 1
+    // x: delete char at restored position
+    assert_nvim_compat(&content, "$jkx", "cursor_restore_vertical_move");
+}
+
+#[test]
 fn test_insert_undo_simple() {
     assert_nvim_compat("hello\n", "i123\\x1bu", "insert_undo_simple");
 }

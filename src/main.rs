@@ -235,11 +235,6 @@ fn main() {
             let _ = handle_request(&mut state, Request::Redraw);
         }
         eloop.poll_events(&mut state, Some(Duration::from_millis(10)));
-        
-        state.update_smear();
-        if !state.smear_trail.is_empty() {
-            let _ = handle_request(&mut state, Request::Redraw);
-        }
     }
     unsafe { 
         print!("\x1B[?1006l\x1B[?1000l");

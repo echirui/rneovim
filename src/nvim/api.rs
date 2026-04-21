@@ -811,10 +811,11 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
                     let kv: Vec<&str> = opt.splitn(2, '=').collect();
                     if kv.len() == 2 {
                         let name = kv[0];
-                        if let Ok(val) = kv[1].parse::<i32>() {
-                            state.options.insert(name.to_string(), crate::nvim::state::OptionValue::Int(val));
+                        let val_str = kv[1];
+                        if let Ok(val) = val_str.parse::<i32>() {
+                            state.options.insert(name.to_string(), crate::nvim::state::OptionValue::Int(val as i64));
                         } else {
-                            state.options.insert(name.to_string(), crate::nvim::state::OptionValue::String(kv[1].to_string()));
+                            state.options.insert(name.to_string(), crate::nvim::state::OptionValue::String(val_str.to_string()));
                         }
                     }
                 } else if opt.starts_with("no") {

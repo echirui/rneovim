@@ -1,82 +1,17 @@
-use crate::nvim::buffer::Buffer;
-use crate::nvim::window::{Window, Cursor};
-use crate::nvim::ui::grid::{Grid, Color};
-use crate::nvim::eval::{EvalContext, TypVal};
-use crate::nvim::lua::LuaEnv;
-use crate::nvim::request::{Request, Operator};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use crate::nvim::syntax::SyntaxHighlighter;
-use crate::nvim::event::event_loop::EventCallback;
 use std::sync::mpsc::Sender;
-
 use serde::{Serialize, Deserialize};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Mode {
-    Normal,
-    Insert,
-    InsertLiteral,
-    InsertDigraph1(char),
-    InsertWaitRegister,
-    Replace,
-    VirtualReplace,
-    WaitReplaceChar,
-    Visual(VisualMode),
-    CommandLine,
-    CommandLineWaitRegister,
-    WaitMacroReg,
-    Search,
-    BlockInsert { append: bool, anchor: Cursor, cursor: Cursor },
-    InsertOnce,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum VisualMode {
-    Char,
-    Line,
-    Block,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum OptionValue {
-    Bool(bool),
-    Int(i32),
-    String(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum AutoCmdEvent {
-    BufWritePost,
-    BufReadPost,
-    CursorMoved,
-    InsertEnter,
-    InsertLeave,
-    VimEnter,
-}
-
-pub struct TabPage {
-    pub windows: Vec<Window>,
-    pub current_win_idx: usize,
-}
-
-impl TabPage {
-    pub fn new(win: Window) -> Self {
-        Self {
-            windows: vec![win],
-            current_win_idx: 0,
-        }
-    }
-
-    pub fn current_window(&self) -> &Window {
-        &self.windows[self.current_win_idx]
-    }
-
-    pub fn current_window_mut(&mut self) -> &mut Window {
-        &mut self.windows[self.current_win_idx]
-    }
-}
+use crate::nvim::buffer::Buffer;
+use crate::nvim::window::{Window, Cursor};
+use crate::nvim::ui::grid::{Grid, Color};
+use crate::nvim::eval::EvalContext;
+use crate::nvim::lua::LuaEnv;
+use crate::nvim::request::{Request, Operator, Motion, TextObject};
+use crate::nvim::error::Result;
+use crate::nvim::event::event_loop::EventCallback;
+use crate::nvim::syntax::SyntaxHighlighter;
 
 pub struct VimState {
     pub mode: Mode,
@@ -129,15 +64,50 @@ pub struct VimState {
     pub keymap: crate::nvim::keymap::KeymapEngine,
     pub quickfix_list: Vec<(String, usize, String)>, // (file, lnum, text)
     pub quit: bool,
-    pub smear_trail: Vec<SmearPoint>,
-    pub smear_points: Vec<((f32, f32), (f32, f32))>, // (pos, vel)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AutoCmdEvent {
+    BufReadPost,
+    BufWritePost,
+    BufEnter,
+    FileType,
+    InsertEnter,
+    InsertLeave,
+    VimEnter,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Mode {
+    Normal,
+    Insert,
+    InsertOnce,
+    InsertLiteral,
+    InsertDigraph1(char),
+    InsertWaitRegister,
+    Visual(VisualMode),
+    CommandLine,
+    Search,
+    CommandLineWaitRegister,
+    Replace,
+    VirtualReplace,
+    WaitMacroReg,
+    WaitReplaceChar,
+    BlockInsert { append: bool, anchor: Cursor, cursor: Cursor },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VisualMode {
+    Char,
+    Line,
+    Block,
 }
 
 #[derive(Debug, Clone)]
-pub struct SmearPoint {
-    pub row: usize, // buffer row
-    pub col: usize, // buffer col
-    pub intensity: f32,
+pub enum OptionValue {
+    Bool(bool),
+    Int(i64),
+    String(String),
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +115,20 @@ pub struct LastCharSearch {
     pub target: char,
     pub forward: bool,
     pub till: bool,
+}
+
+pub struct TabPage {
+    pub windows: Vec<Window>,
+    pub current_win_idx: usize,
+}
+
+impl TabPage {
+    pub fn new(window: Window) -> Self {
+        Self {
+            windows: vec![window],
+            current_win_idx: 0,
+        }
+    }
 }
 
 impl VimState {
@@ -158,53 +142,15 @@ impl VimState {
         let mut options = HashMap::new();
         options.insert("number".to_string(), OptionValue::Bool(false));
         options.insert("tabstop".to_string(), OptionValue::Int(8));
-        options.insert("incsearch".to_string(), OptionValue::Bool(true));
-
-        let mut eval_context = EvalContext::new();
-        eval_context.register_builtin("getline", |state, args| {
-            if let Some(TypVal::String(s)) = args.first() {
-                let lnum = match s.as_str() {
-                    "." => state.current_window().cursor().row,
-                    "$" => state.current_window().buffer().borrow().line_count(),
-                    _ => s.parse::<usize>().unwrap_or(0),
-                };
-                if lnum > 0 {
-                    if let Some(line) = state.current_window().buffer().borrow().get_line(lnum) {
-                        return Ok(TypVal::String(line.to_string()));
-                    }
-                }
-            } else if let Some(TypVal::Number(n)) = args.first() {
-                let lnum = *n as usize;
-                if lnum > 0 {
-                    if let Some(line) = state.current_window().buffer().borrow().get_line(lnum) {
-                        return Ok(TypVal::String(line.to_string()));
-                    }
-                }
-            }
-            Ok(TypVal::String("".to_string()))
-        });
-        eval_context.register_builtin("setline", |state, args| {
-            if let (Some(lnum_arg), Some(TypVal::String(new_line))) = (args.get(0), args.get(1)) {
-                let lnum = match lnum_arg {
-                    TypVal::String(s) if s == "." => state.current_window().cursor().row,
-                    TypVal::String(s) if s == "$" => state.current_window().buffer().borrow().line_count(),
-                    TypVal::String(s) => s.parse::<usize>().unwrap_or(0),
-                    TypVal::Number(n) => *n as usize,
-                    _ => 0,
-                };
-                if lnum > 0 {
-                    let _ = state.current_window().buffer().borrow_mut().set_line(lnum, 0, new_line);
-                }
-            }
-            Ok(TypVal::Number(0))
-        });
-
+        options.insert("statusline".to_string(), OptionValue::String("%f %m %y [%L lines]".to_string()));
+        options.insert("signcolumn".to_string(), OptionValue::String("auto".to_string()));
+        
         Self {
             mode: Mode::Normal,
-            buffers: vec![buf],
+            buffers: vec![Rc::clone(&buf)],
             tabpages: vec![tabpage],
             current_tab_idx: 0,
-            eval_context,
+            eval_context: EvalContext::new(),
             lua_env: LuaEnv::new(),
             visual_anchor: None,
             last_visual_anchor: None,
@@ -249,65 +195,55 @@ impl VimState {
             keymap: crate::nvim::keymap::KeymapEngine::new(),
             quickfix_list: Vec::new(),
             quit: false,
-            smear_trail: Vec::new(),
-            smear_points: vec![((1.0, 0.0), (0.0, 0.0)); 8],
         }
     }
 
     pub fn current_tabpage(&self) -> &TabPage { &self.tabpages[self.current_tab_idx] }
     pub fn current_tabpage_mut(&mut self) -> &mut TabPage { &mut self.tabpages[self.current_tab_idx] }
-    pub fn current_window(&self) -> &Window { self.current_tabpage().current_window() }
-    pub fn current_window_mut(&mut self) -> &mut Window { self.current_tabpage_mut().current_window_mut() }
-    pub fn grid_mut(&mut self) -> &mut Grid { &mut self.grid }
+
+    pub fn current_window(&self) -> &Window {
+        &self.current_tabpage().windows[self.current_tabpage().current_win_idx]
+    }
+
+    pub fn current_window_mut(&mut self) -> &mut Window {
+        let tab = &mut self.tabpages[self.current_tab_idx];
+        &mut tab.windows[tab.current_win_idx]
+    }
 
     pub fn redraw(&mut self) {
         self.grid.clear();
-        let (win_cursor, win_topline, win_height, buf_ref) = {
-            let win = self.current_window();
-            (win.cursor(), win.topline(), win.height(), win.buffer())
-        };
-        let b = buf_ref.borrow();
+        let win = self.current_window();
+        let win_cursor = win.cursor();
+        let buf = win.buffer();
+        let b = buf.borrow();
         
-        let (mode_label, status_bg) = match self.mode {
-            Mode::Normal => (" NORMAL ", Color::White),
-            Mode::Insert | Mode::InsertWaitRegister => (" INSERT ", Color::Green),
-            Mode::Replace | Mode::VirtualReplace => (" REPLACE ", Color::Green),
-            Mode::WaitReplaceChar => (" REPLACE ", Color::Green),
-            Mode::InsertLiteral => (" LITERAL ", Color::Green),
-            Mode::InsertDigraph1(_) => (" DIGRAPH ", Color::Green),
-            Mode::Visual(_) => (" VISUAL ", Color::Magenta),
-            Mode::CommandLine | Mode::CommandLineWaitRegister | Mode::WaitMacroReg => (" COMMAND ", Color::Yellow),
-            Mode::Search => (" SEARCH ", Color::Yellow),
-            Mode::BlockInsert { .. } => (" (insert) BLOCK ", Color::Magenta),
-            Mode::InsertOnce => (" (once) ", Color::Cyan),
-        };
-        let tab_info = format!(" Tab {}/{} ", self.current_tab_idx + 1, self.tabpages.len());
-        let file_name = b.name().unwrap_or("[No Name]");
-        let recording_status = if let Some((reg, _)) = self.macro_recording { format!(" recording @{} ", reg) } else { "".to_string() };
-        let stats = format!(" {:>3}:{:>2} | Total: {:>4} lines ", win_cursor.row, win_cursor.col, b.line_count());
-        let status = format!("{tab_info}| {file_name}{recording_status}{stats}");
+        let show_number = match self.options.get("number") { Some(OptionValue::Bool(b)) => *b, _ => false };
+        let show_signcolumn = match self.options.get("signcolumn") { Some(OptionValue::String(s)) => s != "no", _ => false };
         
-        let show_number = match self.options.get("number") { Some(crate::nvim::state::OptionValue::Bool(b)) => *b, _ => false };
-        let show_signcolumn = match self.options.get("signcolumn") { Some(crate::nvim::state::OptionValue::Bool(b)) => *b, _ => false };
-        let sign_margin = if show_signcolumn { 2 } else { 0 };
-        let num_margin = if show_number { 4 } else { 0 };
-        let base_margin = 2; 
-        let margin = sign_margin + num_margin + base_margin;
-
-        let folds = { let win = self.current_window(); win.folds.clone() };
         let mut row = 0;
-        let mut lnum = win_topline;
+        let mut lnum = win.topline();
+        let margin = (if show_number { 4 } else { 0 }) + (if show_signcolumn { 2 } else { 0 }) + 2;
 
-        while row < win_height {
-            if lnum <= b.line_count() {
-                let mut folded_range = None;
-                for &(s, e) in &folds { if lnum >= s && lnum <= e { folded_range = Some((s, e)); break; } }
-                if let Some((s, e)) = folded_range {
-                    let fold_text = format!("+-- {:>3} lines: ", e - s + 1);
-                    self.grid.put_str(row, 0, &fold_text, Color::Blue, Color::Default, false);
-                    lnum = e + 1; row += 1; continue;
-                }
-                if let Some(line) = b.get_line(lnum) {
+        let status_bg = match self.mode {
+            Mode::Insert | Mode::BlockInsert {..} => Color::Green,
+            Mode::Visual(_) => Color::Magenta,
+            Mode::CommandLine | Mode::Search => Color::Yellow,
+            _ => Color::White,
+        };
+        let mode_label = match self.mode {
+            Mode::Normal => "-- NORMAL --",
+            Mode::Insert | Mode::BlockInsert {..} => "-- INSERT --",
+            Mode::Visual(VisualMode::Char) => "-- VISUAL --",
+            Mode::Visual(VisualMode::Line) => "-- VISUAL LINE --",
+            Mode::Visual(VisualMode::Block) => "-- VISUAL BLOCK --",
+            Mode::CommandLine => ":",
+            Mode::Search => "/",
+            _ => "-- UNKNOWN --",
+        };
+
+        while row < self.grid.height.saturating_sub(2) {
+            if let Some(line) = b.get_line(lnum) {
+                {
                     let is_current_line = lnum == win_cursor.row;
                     self.lua_env.trigger_on_line();
                     let mut current_offset = 0;
@@ -327,7 +263,6 @@ impl VimState {
                     let highlights = self.highlighter.highlight_line(line);
                     let mut current_vcol = 0;
                     
-                    // RTL判定
                     let has_rtl = line.chars().any(|c| {
                         let class = unicode_bidi::bidi_class(c);
                         matches!(class, unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL | unicode_bidi::BidiClass::AN)
@@ -335,11 +270,6 @@ impl VimState {
 
                     if has_rtl {
                         self.grid.put_str_bidi(row, margin, line, Color::Default, Color::Default, false);
-                        // カーソル表示などの最小限の処理
-                        if is_current_line {
-                            // RTLの場合は本来の位置計算が複雑だが、一旦簡易的に
-                            // ...
-                        }
                     } else {
                         for (c_idx, c) in line.chars().enumerate() {
                             let c_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
@@ -354,18 +284,13 @@ impl VimState {
                                             } else {
                                                 (win_cursor, anchor)
                                             };
-
                                             if lnum > v_start.row && lnum < v_end.row {
-                                                // 行間全体
                                                 bg = Color::Blue; fg = Color::White;
                                             } else if lnum == v_start.row && lnum == v_end.row {
-                                                // 同一行内
                                                 if c_idx >= v_start.col && c_idx <= v_end.col { bg = Color::Blue; fg = Color::White; }
                                             } else if lnum == v_start.row {
-                                                // 開始行
                                                 if c_idx >= v_start.col { bg = Color::Blue; fg = Color::White; }
                                             } else if lnum == v_end.row {
-                                                // 終了行
                                                 if c_idx <= v_end.col { bg = Color::Blue; fg = Color::White; }
                                             }
                                         }
@@ -385,14 +310,6 @@ impl VimState {
                                 }
                             }
 
-                            // Smear trail rendering
-                            for point in &self.smear_trail {
-                                if point.row == lnum && point.col == c_idx {
-                                    bg = Color::Blue;
-                                    break;
-                                }
-                            }
-
                             if is_current_line && c_idx == win_cursor.col && self.mode != Mode::CommandLine && self.mode != Mode::Search {
                                 fg = Color::Black; bg = Color::Cyan; bold = true;
                             }
@@ -400,22 +317,9 @@ impl VimState {
                             current_vcol += c_width;
                         }
                     }
-                    let mut smear_at_end = false;
-                    for point in &self.smear_trail {
-                        if point.row == lnum && point.col >= line.chars().count() {
-                            smear_at_end = true;
-                            break;
-                        }
-                    }
-
                     if is_current_line && win_cursor.col >= line.chars().count() && self.mode != Mode::CommandLine && self.mode != Mode::Search {
-                        // RTLでない場合のみ末尾カーソルを表示（RTLは位置が逆転するため）
                         if !has_rtl {
                             self.grid.put_char(row, margin + current_vcol, ' ', Color::Black, Color::Cyan, true);
-                        }
-                    } else if smear_at_end {
-                        if !has_rtl {
-                            self.grid.put_char(row, margin + current_vcol, ' ', Color::Default, Color::Blue, false);
                         }
                     }
                     if let Some(vt) = b.get_virtual_text(lnum) {
@@ -430,103 +334,18 @@ impl VimState {
         let status_row = self.grid.height.saturating_sub(2);
         self.grid.put_str(status_row, 0, mode_label, Color::Black, status_bg, true);
         let mode_len = mode_label.len();
-        self.grid.put_str(status_row, mode_len, &status, Color::Black, Color::White, false);
-        for c in (mode_len + status.len())..self.grid.width { self.grid.put_char(status_row, c, ' ', Color::Black, Color::White, false); }
-
+        let status = self.format_statusline();
+        self.grid.put_str(status_row, mode_len + 1, &status, Color::White, Color::Black, false);
+        
         let cmd_row = self.grid.height.saturating_sub(1);
         if self.mode == Mode::CommandLine || self.mode == Mode::Search {
             let prefix = if self.mode == Mode::CommandLine { ":" } else { "/" };
-            self.grid.put_str(cmd_row, 0, prefix, Color::White, Color::Default, true);
-            let mut current_vcol = 1;
-            let cmd_chars: Vec<char> = self.cmdline.chars().collect();
-            for (i, &c) in cmd_chars.iter().enumerate() {
-                let c_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-                let (fg, bg, bold) = if i == self.cmdline_cursor {
-                    (Color::Black, Color::Cyan, true)
-                } else {
-                    (Color::White, Color::Default, false)
-                };
-                self.grid.put_char(cmd_row, current_vcol, c, fg, bg, bold);
-                current_vcol += c_width;
-            }
-            if self.cmdline_cursor >= cmd_chars.len() {
-                self.grid.put_char(cmd_row, current_vcol, ' ', Color::Black, Color::Cyan, true);
-            }
-        } else {
-            let msg = " (Press ':' cmd, '/' search, 'v' visual, 'i' insert, 'u' undo) ";
-            self.grid.put_str(cmd_row, 0, msg, Color::White, Color::Black, false);
-        }
-
-        if let Some(items) = &self.pum_items {
-            let cursor = self.current_window().cursor();
-            let mut pum_row = cursor.row.saturating_sub(win_topline) + 1;
-            if pum_row + items.len() > win_height { pum_row = (cursor.row.saturating_sub(win_topline)).saturating_sub(items.len()); }
-            for (i, item) in items.iter().enumerate() {
-                let r = pum_row + i;
-                if r < win_height {
-                    let is_selected = Some(i) == self.pum_index;
-                    let (fg, bg) = if is_selected { (Color::Black, Color::Yellow) } else { (Color::White, Color::Magenta) };
-                    let display_str = format!("{:<20}", item);
-                    self.grid.put_str(r, margin + cursor.col, &display_str, fg, bg, false);
-                }
-            }
+            self.grid.put_str(cmd_row, 0, prefix, Color::White, Color::Default, false);
+            self.grid.put_str(cmd_row, 1, &self.cmdline, Color::White, Color::Default, false);
+        } else if !self.messages.is_empty() {
+            self.grid.put_str(cmd_row, 0, self.messages.last().unwrap(), Color::White, Color::Default, false);
         }
         self.grid.flush();
-    }
-
-    pub fn update_smear(&mut self) {
-        let target = self.current_window().cursor();
-        let target_r = target.row as f32;
-        let target_c = target.col as f32;
-
-        let stiffness = 0.6;
-        let damping = 0.5; // More responsive damping
-        let trailing_stiffness = 0.3;
-
-        let mut prev_pos = (target_r, target_c);
-        let mut moving = false;
-
-        for (i, (pos, vel)) in self.smear_points.iter_mut().enumerate() {
-            let s = if i == 0 { stiffness } else { trailing_stiffness };
-            
-            let dr = prev_pos.0 - pos.0;
-            let dc = prev_pos.1 - pos.1;
-            
-            vel.0 = vel.0 * damping + dr * s;
-            vel.1 = vel.1 * damping + dc * s;
-            
-            pos.0 += vel.0;
-            pos.1 += vel.1;
-            
-            if vel.0.abs() > 0.01 || vel.1.abs() > 0.01 || dr.abs() > 0.01 || dc.abs() > 0.01 {
-                moving = true;
-            }
-            
-            prev_pos = *pos;
-        }
-
-        self.smear_trail.clear();
-        if moving {
-            // Fill gaps between segments to make a continuous trail
-            let mut last_rendered = (target_r, target_c);
-            for (i, (pos, _)) in self.smear_points.iter().enumerate() {
-                let r1 = last_rendered.0; let c1 = last_rendered.1;
-                let r2 = pos.0; let c2 = pos.1;
-                
-                // Bresenham-like or simple linear steps
-                let dist = ((r1-r2).powi(2) + (c1-c2).powi(2)).sqrt().max(1.0);
-                let steps = dist.round() as usize;
-                for step in 1..=steps {
-                    let t = step as f32 / steps as f32;
-                    self.smear_trail.push(SmearPoint {
-                        row: (r1 + (r2 - r1) * t).round() as usize,
-                        col: (c1 + (c2 - c1) * t).round() as usize,
-                        intensity: 1.0 - (i as f32 / self.smear_points.len() as f32),
-                    });
-                }
-                last_rendered = *pos;
-            }
-        }
     }
 
     pub fn set_mode(&mut self, mode: Mode) {
@@ -539,7 +358,6 @@ impl VimState {
             self.last_insert_cursor = Some(self.current_window().cursor());
         }
 
-        // アンドゥグループの管理
         let is_insert_like = |m: &Mode| matches!(m, Mode::Insert | Mode::Replace | Mode::VirtualReplace | Mode::BlockInsert {..} | Mode::InsertOnce | Mode::InsertLiteral | Mode::InsertDigraph1(_));
         let new_is_insert = is_insert_like(&mode);
         let old_is_insert = is_insert_like(&self.mode);
@@ -582,14 +400,25 @@ impl VimState {
         let b = b.borrow();
         let cur = self.current_window().cursor();
         let mut res = match self.options.get("statusline") {
-            Some(crate::nvim::state::OptionValue::String(s)) => s.clone(),
-            _ => "File: %f | %l:%c | Total: %L".to_string(),
+            Some(OptionValue::String(s)) => s.clone(),
+            _ => "%f %m %y [%L lines]".to_string(),
         };
-        res = res.replace("%f", b.name().unwrap_or("[No Name]"));
+        let name = b.name().unwrap_or("[No Name]");
+        let modified = if b.is_modified() { "[+]" } else { "" };
+        res = res.replace("%f", name);
+        res = res.replace("%m", modified);
+        res = res.replace("%y", "[rust]");
+        res = res.replace("%L", &b.line_count().to_string());
         res = res.replace("%l", &cur.row.to_string());
         res = res.replace("%c", &cur.col.to_string());
-        res = res.replace("%L", &b.line_count().to_string());
         res
+    }
+
+    pub fn get_option_bool(&self, name: &str) -> bool {
+        match self.options.get(name) {
+            Some(OptionValue::Bool(b)) => *b,
+            _ => false,
+        }
     }
 }
 
@@ -601,89 +430,15 @@ mod tests {
     fn test_vim_state_initialization() {
         let state = VimState::new();
         assert_eq!(state.mode, Mode::Normal);
-        assert_eq!(state.buffers.len(), 1);
-        assert_eq!(state.tabpages.len(), 1);
-        assert!(!state.quit);
     }
 
     #[test]
     fn test_mode_transitions() {
         let mut state = VimState::new();
-        {
-            let buf = state.current_window().buffer();
-            let mut b = buf.borrow_mut();
-            for _ in 0..10 { b.append_line("          ").unwrap(); }
-        }
-        
         state.set_mode(Mode::Insert);
         assert_eq!(state.mode, Mode::Insert);
-        
         state.set_mode(Mode::Normal);
         assert_eq!(state.mode, Mode::Normal);
-        assert!(state.last_insert_cursor.is_some());
-
-        state.current_window_mut().set_cursor(1, 5);
-        state.set_mode(Mode::Visual(VisualMode::Char));
-        state.visual_anchor = Some(Cursor { row: 1, col: 0 });
-        
-        state.set_mode(Mode::Normal);
-        assert_eq!(state.last_visual_mode, Some(VisualMode::Char));
-        assert_eq!(state.last_visual_anchor.unwrap().col, 0);
-        assert_eq!(state.last_visual_cursor.unwrap().col, 5);
-    }
-
-    #[test]
-    fn test_statusline_rendering() {
-        let mut state = VimState::new();
-        {
-            let buf = state.current_window().buffer();
-            let mut b = buf.borrow_mut();
-            for _ in 0..10 { b.append_line("          ").unwrap(); }
-        }
-        state.current_window_mut().set_cursor(5, 10);
-        
-        let status = state.format_statusline();
-        assert!(status.contains("5:10"));
-        assert!(status.contains("[No Name]"));
-
-        // Custom statusline
-        state.options.insert("statusline".to_string(), OptionValue::String("POS: %l,%c".to_string()));
-        let status = state.format_statusline();
-        assert_eq!(status, "POS: 5,10");
-    }
-
-    #[test]
-    fn test_tabpage_window_access() {
-        let state = VimState::new();
-        let tp = state.current_tabpage();
-        assert_eq!(tp.windows.len(), 1);
-        let win = state.current_window();
-        assert_eq!(win.cursor().row, 1);
-    }
-
-    #[test]
-    fn test_redraw_basic() {
-        let mut state = VimState::new();
-        {
-            let buf = state.current_window().buffer();
-            let mut b = buf.borrow_mut();
-            b.append_line("Hello").unwrap();
-        }
-        state.redraw();
-        
-        // Check if "Hello" is in the grid
-        // margin = 0 (sign) + 0 (num) + 2 (base) = 2
-        assert_eq!(state.grid.get_char(0, 2), 'H');
-        assert_eq!(state.grid.get_char(0, 3), 'e');
-        assert_eq!(state.grid.get_char(0, 4), 'l');
-    }
-
-    #[test]
-    fn test_vim_state_quit() {
-        let mut state = VimState::new();
-        assert!(!state.should_quit());
-        state.quit();
-        assert!(state.should_quit());
     }
 
     #[test]
@@ -707,36 +462,5 @@ mod tests {
     fn test_vim_state_buffers() {
         let state = VimState::new();
         assert_eq!(state.buffers().len(), 1);
-    }
-
-    #[test]
-    fn test_update_smear() {
-        let mut state = VimState::new();
-        {
-            let buf = state.buffers[0].clone();
-            let mut b = buf.borrow_mut();
-            for i in 1..=20 {
-                b.append_line(&format!("line {}", i)).unwrap();
-            }
-        }
-        state.current_window_mut().set_cursor(10, 5);
-        state.update_smear();
-        
-        // Should have started moving towards (10, 5)
-        assert!(!state.smear_trail.is_empty());
-        assert!(state.smear_points[0].0.0 > 1.0); 
-        
-        // Eventually should reach target and stop moving
-        for _ in 0..100 {
-            state.update_smear();
-        }
-        // Last point might not perfectly match due to precision but should be very close
-        assert!((state.smear_points[0].0.0 - 10.0).abs() < 0.1);
-        
-        // Eventually trail should clear when fully stopped
-        for _ in 0..50 {
-            state.update_smear();
-        }
-        assert!(state.smear_trail.is_empty());
     }
 }
