@@ -85,13 +85,18 @@ impl Window {
         self.adjust_topline();
     }
 
+    pub fn set_curswant(&mut self, col: usize) {
+        self.curswant = col;
+    }
+
     pub fn set_cursor_vertical(&mut self, row: usize) {
         let c = if let Ok(buf) = self.buffer.try_borrow() {
             let chars_count = buf.get_line(row).map(|l| l.chars().count()).unwrap_or(0);
-            if chars_count == 0 { 0 } else { self.curswant.min(chars_count.saturating_sub(1)) }
+            if chars_count == 0 { 0 } 
+            else if self.curswant == usize::MAX { chars_count.saturating_sub(1) }
+            else { self.curswant.min(chars_count.saturating_sub(1)) }
         } else {
-            // 借用できない場合はとりあえずそのまま（呼び出し側で調整されることを期待）
-            self.curswant
+            self.curswant.min(1000) // Fallback
         };
         self.cursor = Cursor { row, col: c };
         self.adjust_topline();

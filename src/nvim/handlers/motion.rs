@@ -205,6 +205,9 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 Operator::None => {
                     if !matches!(motion, Motion::Up | Motion::Down) {
                         state.current_window_mut().set_cursor(target.row, target.col);
+                        if let Motion::LineEnd = motion {
+                            state.current_window_mut().set_curswant(usize::MAX);
+                        }
                     }
                 },
                 Operator::Delete => {

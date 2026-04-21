@@ -152,6 +152,15 @@ fn test_cursor_restore_vertical_move() {
 }
 
 #[test]
+fn test_cursor_restore_vertical_jump() {
+    let content = std::fs::read_to_string("sample.txt").expect("sample.txt not found");
+    // $: end of line 1 (col 14)
+    // 10j: down 10 lines to line 11
+    // x: delete char at col 14 of line 11
+    assert_nvim_compat(&content, "$10jx", "cursor_restore_vertical_jump");
+}
+
+#[test]
 fn test_insert_undo_simple() {
     assert_nvim_compat("hello\n", "i123\\x1bu", "insert_undo_simple");
 }
