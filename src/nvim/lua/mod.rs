@@ -19,12 +19,36 @@ impl LuaEnv {
         Self { lua }
     }
 
+    fn get_config_dir() -> std::path::PathBuf {
+        if let Some(home) = dirs::home_dir() {
+            let xdg_config = home.join(".config/rneovim");
+            if xdg_config.exists() { return xdg_config; }
+        }
+        dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("rneovim")
+    }
+
+    fn get_data_dir() -> std::path::PathBuf {
+        if let Some(home) = dirs::home_dir() {
+            let xdg_data = home.join(".local/share/rneovim");
+            if xdg_data.exists() || home.join(".local/share").exists() { return xdg_data; }
+        }
+        dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("rneovim")
+    }
+
     pub fn register_api(&self, buffers: Vec<Rc<RefCell<Buffer>>>, sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
         let globals = self.lua.globals();
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
 
-        // nvim_buf_get_lines
+        let print = self.lua.create_function(|lua, msg: String| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.messages.push(msg);
+            }
+            Ok(())
+        })?;
+        globals.set("print", print)?;
+
         let buffers_clone = buffers.clone();
         let nvim_buf_get_lines = self.lua.create_function(move |_, (buf_id, start, end, _): (i32, usize, i32, bool)| {
             if let Some(buf_rc) = buffers_clone.iter().find(|b| b.borrow().id() == buf_id) {
@@ -38,13 +62,11 @@ impl LuaEnv {
             } else { Ok(Vec::new()) }
         })?;
 
-        // nvim_buf_set_lines
-        let nvim_buf_set_lines = self.lua.create_function(|lua, (buf_id, start, end, strict, lines): (i32, usize, i32, bool, Vec<String>)| {
+        let nvim_buf_set_lines = self.lua.create_function(|lua, (buf_id, start, end, _strict, lines): (i32, usize, i32, bool, Vec<String>)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
                     let mut b = buf_rc.borrow_mut();
-                    // 簡易実装: 指定範囲を削除して新しい行を挿入
                     let actual_end = if end < 0 { b.line_count() } else { end as usize };
                     for _ in start..actual_end { if start + 1 <= b.line_count() { let _ = b.delete_line(start + 1); } }
                     for (i, line) in lines.into_iter().enumerate() { let _ = b.insert_line(start + i + 1, &line); }
@@ -53,7 +75,6 @@ impl LuaEnv {
             Ok(())
         })?;
 
-        // nvim_create_buf
         let nvim_create_buf = self.lua.create_function(|lua, (_listed, _scratch): (bool, bool)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -64,7 +85,6 @@ impl LuaEnv {
             Ok(0)
         })?;
 
-        // nvim_open_win
         let nvim_open_win = self.lua.create_function(|lua, (buf_id, enter, config): (i32, bool, mlua::Table)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -85,7 +105,6 @@ impl LuaEnv {
             Ok(0)
         })?;
 
-        // nvim_create_user_command
         let nvim_create_user_command = self.lua.create_function(|lua, (name, callback, _opts): (String, mlua::Value, mlua::Table)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -97,18 +116,11 @@ impl LuaEnv {
             Ok(())
         })?;
 
-        let nvim_set_decoration_provider = self.lua.create_function(|lua, (_ns_id, callbacks): (i32, mlua::Table)| {
-            let key = lua.create_registry_value(callbacks)?;
-            lua.set_app_data(key);
-            Ok(())
-        })?;
-
-        let sender_clone = sender.clone();
-        let nvim_command = self.lua.create_function(move |_, cmd: String| {
-            if let Some(s) = &sender_clone {
-                let _ = s.send(Box::new(move |state| { let _ = crate::nvim::api::execute_cmd(state, &cmd); }));
-            }
-            Ok(())
+        let nvim_get_mode = self.lua.create_function(|lua, _: ()| {
+            let res = lua.create_table()?;
+            res.set("mode", "n")?;
+            res.set("blocking", false)?;
+            Ok(res)
         })?;
 
         let nvim_list_runtime_paths = self.lua.create_function(|lua, _: ()| {
@@ -171,14 +183,22 @@ impl LuaEnv {
         api.set("nvim_create_buf", nvim_create_buf)?;
         api.set("nvim_open_win", nvim_open_win)?;
         api.set("nvim_create_user_command", nvim_create_user_command)?;
-        api.set("nvim_set_decoration_provider", nvim_set_decoration_provider)?;
-        api.set("nvim_command", nvim_command)?;
+        api.set("nvim_get_mode", nvim_get_mode)?;
         api.set("nvim_list_runtime_paths", nvim_list_runtime_paths)?;
         api.set("nvim_get_option", nvim_get_option)?;
         api.set("nvim_set_option", nvim_set_option)?;
         api.set("nvim_get_runtime_file", nvim_get_runtime_file)?;
 
+        let sender_clone = sender.clone();
+        api.set("nvim_command", self.lua.create_function(move |_, cmd: String| {
+            if let Some(s) = &sender_clone {
+                let _ = s.send(Box::new(move |state| { let _ = crate::nvim::api::execute_cmd(state, &cmd); }));
+            }
+            Ok(())
+        })?)?;
+
         vim.set("api", api)?;
+
         let sender_clone_2 = sender.clone();
         vim.set("cmd", self.lua.create_function(move |_, cmd: String| {
             if let Some(s) = &sender_clone_2 {
@@ -190,8 +210,8 @@ impl LuaEnv {
         let fn_table = self.lua.create_table()?;
         fn_table.set("stdpath", self.lua.create_function(|_, name: String| {
             match name.as_str() {
-                "config" => Ok(dirs::config_dir().unwrap_or_default().join("rneovim").to_string_lossy().to_string()),
-                "data" => Ok(dirs::data_dir().unwrap_or_default().join("rneovim").to_string_lossy().to_string()),
+                "config" => Ok(Self::get_config_dir().to_string_lossy().to_string()),
+                "data" => Ok(Self::get_data_dir().to_string_lossy().to_string()),
                 "cache" => Ok(dirs::cache_dir().unwrap_or_default().join("rneovim").to_string_lossy().to_string()),
                 _ => Ok("".to_string()),
             }
@@ -274,14 +294,19 @@ impl LuaEnv {
 
     pub fn load_plugins(&self, state: &mut VimState, config_dir: Option<std::path::PathBuf>) {
         self.lua.set_app_data(StateWrapper(state as *mut VimState));
-        let base_dir = config_dir.or_else(|| dirs::config_dir()).unwrap_or_else(|| std::path::PathBuf::from("."));
-        let rneovim_dir = base_dir.join("rneovim");
-        if let Some(data) = dirs::data_dir() {
-            let lazy_path = data.join("rneovim/lazy");
-            if !lazy_path.exists() { let _ = std::fs::create_dir_all(&lazy_path); }
+        let rneovim_config = config_dir.unwrap_or_else(Self::get_config_dir);
+        let rneovim_data = Self::get_data_dir();
+        if !rneovim_data.exists() { let _ = std::fs::create_dir_all(rneovim_data.join("lazy")); }
+        let init_lua = rneovim_config.join("init.lua");
+        if init_lua.exists() {
+            if let Err(e) = self.execute_file(&init_lua) {
+                let msg = format!("Error executing init.lua: {}", e);
+                eprintln!("{}", msg);
+                state.messages.push(msg);
+            }
+        } else {
+            state.messages.push(format!("init.lua not found at {:?}", init_lua));
         }
-        let init_lua = rneovim_dir.join("init.lua");
-        if init_lua.exists() { if let Err(e) = self.execute_file(&init_lua) { eprintln!("Error executing init.lua: {}", e); } }
     }
 
     pub fn trigger_on_line(&self) {
