@@ -111,9 +111,7 @@ impl LuaEnv {
         let nvim_buf_get_name = self.lua.create_function(|lua, buf_id: i32| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
-                if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
-                    return Ok(buf_rc.borrow().name().unwrap_or("").to_string());
-                }
+                if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) { return Ok(buf_rc.borrow().name().unwrap_or("").to_string()); }
             }
             Ok("".to_string())
         })?;
@@ -194,9 +192,7 @@ impl LuaEnv {
                 let state = unsafe { &mut *wrapper.0 };
                 let buf_rc_opt = state.buffers.iter().find(|b| b.borrow().id() == buf_id).cloned();
                 if let Some(buf_rc) = buf_rc_opt {
-                    for win in &mut state.current_tabpage_mut().windows {
-                        if win.id() == win_id { win.buffer = buf_rc; break; }
-                    }
+                    for win in &mut state.current_tabpage_mut().windows { if win.id() == win_id { win.buffer = buf_rc; break; } }
                 }
             }
             Ok(())
@@ -219,6 +215,10 @@ impl LuaEnv {
 
         let nvim_buf_set_option = self.lua.create_function(|_, (_buf, _name, _val): (i32, String, mlua::Value)| { Ok(()) })?;
         let nvim_win_set_option = self.lua.create_function(|_, (_win, _name, _val): (i32, String, mlua::Value)| { Ok(()) })?;
+        let nvim_set_hl = self.lua.create_function(|_, (_ns, _name, _val): (i32, String, mlua::Table)| { Ok(()) })?;
+        let nvim_buf_add_highlight = self.lua.create_function(|_, (_buf, _ns, _hl, _line, _s, _e): (i32, i32, String, usize, usize, usize)| { Ok(0) })?;
+        let nvim_buf_set_extmark = self.lua.create_function(|_, (_buf, _ns, _line, _col, _opts): (i32, i32, usize, usize, mlua::Table)| { Ok(1) })?;
+        let nvim_buf_clear_namespace = self.lua.create_function(|_, (_buf, _ns, _s, _e): (i32, i32, i32, i32)| { Ok(()) })?;
 
         let nvim_win_get_config = self.lua.create_function(|lua, _win: i32| {
             let res = lua.create_table()?;
@@ -251,6 +251,12 @@ impl LuaEnv {
             ui.set("width", 80)?; ui.set("height", 24)?;
             Ok(vec![ui])
         })?;
+        let nvim_get_vvar = self.lua.create_function(|lua, name: String| {
+            match name.as_str() {
+                "vim_did_enter" => Ok(mlua::Value::Integer(1)),
+                _ => Ok(mlua::Value::Nil),
+            }
+        })?;
 
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
         api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
@@ -259,6 +265,9 @@ impl LuaEnv {
         api.set("nvim_buf_line_count", nvim_buf_line_count)?;
         api.set("nvim_buf_get_option", nvim_buf_get_option)?;
         api.set("nvim_buf_set_option", nvim_buf_set_option)?;
+        api.set("nvim_buf_add_highlight", nvim_buf_add_highlight)?;
+        api.set("nvim_buf_set_extmark", nvim_buf_set_extmark)?;
+        api.set("nvim_buf_clear_namespace", nvim_buf_clear_namespace)?;
         api.set("nvim_win_set_option", nvim_win_set_option)?;
         api.set("nvim_win_get_buf", nvim_win_get_buf)?;
         api.set("nvim_win_set_buf", nvim_win_set_buf)?;
@@ -275,6 +284,8 @@ impl LuaEnv {
         api.set("nvim_clear_autocmds", nvim_clear_autocmds)?;
         api.set("nvim_echo", self.lua.create_function(|_, _: (Vec<mlua::Table>, bool, mlua::Table)| { Ok(()) })?)?;
         api.set("nvim_list_uis", nvim_list_uis)?;
+        api.set("nvim_get_vvar", nvim_get_vvar)?;
+        api.set("nvim_set_hl", nvim_set_hl)?;
 
         let nvim_list_runtime_paths = self.lua.create_function(|lua, _: ()| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
@@ -318,7 +329,7 @@ impl LuaEnv {
         api.set("nvim_list_runtime_paths", nvim_list_runtime_paths)?;
         api.set("nvim_get_option", nvim_get_option)?;
         api.set("nvim_set_option", nvim_set_option)?;
-        api.set("nvim_get_runtime_file", self.lua.create_function(|_, _: (String, bool)| { Ok(Vec::<String>::new()) })?)?;
+        api.set("nvim_get_runtime_file", self.lua.create_function(|_, (name, _): (String, bool)| { Ok(Vec::<String>::new()) })?)?;
 
         vim.set("api", api)?;
 
@@ -451,6 +462,17 @@ impl LuaEnv {
         let _ = g.set_metatable(Some(g_meta));
         vim.set("g", g)?;
 
+        let v = self.lua.create_table()?;
+        let v_meta = self.lua.create_table()?;
+        v_meta.set("__index", self.lua.create_function(|_, name: String| {
+            match name.as_str() {
+                "vim_did_enter" => Ok(mlua::Value::Integer(1)),
+                _ => Ok(mlua::Value::Nil),
+            }
+        })?)?;
+        let _ = v.set_metatable(Some(v_meta));
+        vim.set("v", v)?;
+
         let go = self.lua.create_table()?;
         let go_meta = self.lua.create_table()?;
         go_meta.set("__index", self.lua.create_function(|lua, (_table, name): (mlua::Table, String)| {
@@ -556,7 +578,10 @@ impl LuaEnv {
                 let fargs: Vec<String> = args.split_whitespace().map(|s| s.to_string()).collect();
                 arg_table.set("fargs", fargs)?;
                 arg_table.set("bang", false)?;
-                let _ = func.call::<()>(arg_table);
+                
+                if let Err(e) = func.call::<()>(arg_table) {
+                    state.messages.push(format!("Command Error: {}", e));
+                }
                 state.redraw();
             }
         }
