@@ -86,18 +86,18 @@ impl Grid {
         }
     }
 
+    pub fn clear(&mut self) {
+        for cell in self.cells.iter_mut() {
+            *cell = Cell::default();
+        }
+    }
+
     pub fn resize(&mut self, width: usize, height: usize) {
         let size = width * height;
         self.width = width;
         self.height = height;
         self.cells = vec![Cell::default(); size];
         self.old_cells = vec![Cell::default(); size];
-    }
-
-    pub fn clear(&mut self) {
-        for cell in self.cells.iter_mut() {
-            *cell = Cell::default();
-        }
     }
 
     pub fn put_char(&mut self, row: usize, col: usize, c: char, fg: Color, bg: Color, bold: bool) {

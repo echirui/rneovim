@@ -91,6 +91,13 @@ fn main() {
     state.sender = Some(sender.clone());
 
     unsafe { os_setup_terminal() };
+    
+    // ターミナルサイズの取得と反映
+    if let Some((terminal_size::Width(w), terminal_size::Height(h))) = terminal_size::terminal_size() {
+        state.grid.resize(w as usize, h as usize);
+        state.current_window_mut().set_height(h as usize - 2);
+    }
+
     print!("\x1B[2J\x1B[H\x1B[?25l\x1B[?1000h\x1B[?1006h");
     state.redraw();
 
