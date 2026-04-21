@@ -56,6 +56,7 @@ impl LuaEnv {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 state.messages.push(msg);
+                state.redraw();
             }
             Ok(())
         })?;
@@ -194,6 +195,28 @@ impl LuaEnv {
         let nvim_create_namespace = self.lua.create_function(|_, _name: String| { Ok(1) })?;
         let nvim_replace_termcodes = self.lua.create_function(|_, (str, _, _, _): (String, bool, bool, bool)| { Ok(str) })?;
 
+        let nvim_echo = self.lua.create_function(|lua, (chunks, _history, _opts): (Vec<mlua::Table>, bool, mlua::Table)| {
+            let mut msg = String::new();
+            for chunk in chunks {
+                if let Ok(text) = chunk.get::<String>(1) { msg.push_str(&text); }
+            }
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.messages.push(msg);
+                state.redraw();
+            }
+            Ok(())
+        })?;
+
+        let nvim_out_write = self.lua.create_function(|lua, msg: String| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.messages.push(msg);
+                state.redraw();
+            }
+            Ok(())
+        })?;
+
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
         api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
         api.set("nvim_buf_set_name", nvim_buf_set_name)?;
@@ -208,6 +231,8 @@ impl LuaEnv {
         api.set("nvim_get_mode", nvim_get_mode)?;
         api.set("nvim_create_namespace", nvim_create_namespace)?;
         api.set("nvim_replace_termcodes", nvim_replace_termcodes)?;
+        api.set("nvim_echo", nvim_echo)?;
+        api.set("nvim_out_write", nvim_out_write)?;
 
         let nvim_list_runtime_paths = self.lua.create_function(|lua, _: ()| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {

@@ -93,6 +93,7 @@ fn main() {
 
     unsafe { os_setup_terminal() };
     print!("\x1B[2J\x1B[H\x1B[?25l\x1B[?1000h\x1B[?1006h");
+    state.redraw();
 
     let sender_clone = sender.clone();
     let _sig_thread = std::thread::spawn(move || {
