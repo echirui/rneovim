@@ -108,6 +108,16 @@ impl LuaEnv {
             Ok(())
         })?;
 
+        let nvim_buf_get_name = self.lua.create_function(|lua, buf_id: i32| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
+                    return Ok(buf_rc.borrow().name().unwrap_or("").to_string());
+                }
+            }
+            Ok("".to_string())
+        })?;
+
         let nvim_buf_line_count = self.lua.create_function(|lua, buf_id: i32| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
@@ -130,6 +140,14 @@ impl LuaEnv {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 return Ok(state.current_window().buffer().borrow().id());
+            }
+            Ok(0)
+        })?;
+
+        let nvim_get_current_win = self.lua.create_function(|lua, _: ()| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                return Ok(state.current_window().id());
             }
             Ok(0)
         })?;
@@ -171,11 +189,23 @@ impl LuaEnv {
             Ok(0)
         })?;
 
+        let nvim_win_set_buf = self.lua.create_function(|lua, (win_id, buf_id): (i32, i32)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                let buf_rc_opt = state.buffers.iter().find(|b| b.borrow().id() == buf_id).cloned();
+                if let Some(buf_rc) = buf_rc_opt {
+                    for win in &mut state.current_tabpage_mut().windows {
+                        if win.id() == win_id { win.buffer = buf_rc; break; }
+                    }
+                }
+            }
+            Ok(())
+        })?;
+
         let nvim_buf_get_option = self.lua.create_function(|lua, (buf_id, name): (i32, String)| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
                 if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
-                    let b = buf_rc.borrow();
                     match name.as_str() {
                         "filetype" => return Ok(mlua::Value::String(lua.create_string("text")?)),
                         "buftype" => return Ok(mlua::Value::String(lua.create_string("")?)),
@@ -192,9 +222,7 @@ impl LuaEnv {
 
         let nvim_win_get_config = self.lua.create_function(|lua, _win: i32| {
             let res = lua.create_table()?;
-            res.set("relative", "editor")?;
-            res.set("width", 80)?;
-            res.set("height", 24)?;
+            res.set("relative", "editor")?; res.set("width", 80)?; res.set("height", 24)?;
             Ok(res)
         })?;
 
@@ -218,16 +246,24 @@ impl LuaEnv {
         let nvim_create_namespace = self.lua.create_function(|_, _name: String| { Ok(1) })?;
         let nvim_replace_termcodes = self.lua.create_function(|_, (str, _, _, _): (String, bool, bool, bool)| { Ok(str) })?;
         let nvim_clear_autocmds = self.lua.create_function(|_, _: mlua::Table| { Ok(()) })?;
+        let nvim_list_uis = self.lua.create_function(|lua, _: ()| {
+            let ui = lua.create_table()?;
+            ui.set("width", 80)?; ui.set("height", 24)?;
+            Ok(vec![ui])
+        })?;
 
         api.set("nvim_buf_get_lines", nvim_buf_get_lines)?;
         api.set("nvim_buf_set_lines", nvim_buf_set_lines)?;
         api.set("nvim_buf_set_name", nvim_buf_set_name)?;
+        api.set("nvim_buf_get_name", nvim_buf_get_name)?;
         api.set("nvim_buf_line_count", nvim_buf_line_count)?;
         api.set("nvim_buf_get_option", nvim_buf_get_option)?;
         api.set("nvim_buf_set_option", nvim_buf_set_option)?;
         api.set("nvim_win_set_option", nvim_win_set_option)?;
         api.set("nvim_win_get_buf", nvim_win_get_buf)?;
+        api.set("nvim_win_set_buf", nvim_win_set_buf)?;
         api.set("nvim_win_get_config", nvim_win_get_config)?;
+        api.set("nvim_get_current_win", nvim_get_current_win)?;
         api.set("nvim_create_buf", nvim_create_buf)?;
         api.set("nvim_get_current_buf", nvim_get_current_buf)?;
         api.set("nvim_list_bufs", nvim_list_bufs)?;
@@ -238,6 +274,7 @@ impl LuaEnv {
         api.set("nvim_replace_termcodes", nvim_replace_termcodes)?;
         api.set("nvim_clear_autocmds", nvim_clear_autocmds)?;
         api.set("nvim_echo", self.lua.create_function(|_, _: (Vec<mlua::Table>, bool, mlua::Table)| { Ok(()) })?)?;
+        api.set("nvim_list_uis", nvim_list_uis)?;
 
         let nvim_list_runtime_paths = self.lua.create_function(|lua, _: ()| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
@@ -288,6 +325,23 @@ impl LuaEnv {
         let keymap = self.lua.create_table()?;
         keymap.set("set", self.lua.create_function(|_, (_mode, _lhs, _rhs, _opts): (String, String, mlua::Value, mlua::Table)| { Ok(()) })?)?;
         vim.set("keymap", keymap)?;
+
+        let sender_clone = sender.clone();
+        vim.set("schedule", self.lua.create_function(move |lua, f: mlua::Function| {
+            if let Some(s) = &sender_clone {
+                let key = lua.create_registry_value(f)?;
+                let _ = s.send(Box::new(move |state| {
+                    let env = state.lua_env.borrow();
+                    let func: mlua::Function = match env.lua.registry_value(&key) {
+                        Ok(f) => f,
+                        Err(e) => { eprintln!("vim.schedule error: {}", e); return; }
+                    };
+                    let _ = func.call::<()>(());
+                    let _ = env.lua.remove_registry_value(key);
+                }));
+            }
+            Ok(())
+        })?)?;
 
         let sender_clone_2 = sender.clone();
         vim.set("cmd", self.lua.create_function(move |_, cmd: String| {
@@ -493,12 +547,17 @@ impl LuaEnv {
 
     pub fn call_user_command(&self, name: &str, args: &str) -> Result<()> {
         if let Some(mut wrapper) = self.lua.app_data_mut::<StateWrapper>() {
-            let state = unsafe { &*wrapper.0 };
+            let state = unsafe { &mut *wrapper.0 };
             if let Some(key) = state.user_commands.get(name) {
                 let func: mlua::Function = self.lua.registry_value(key)?;
                 let arg_table = self.lua.create_table()?;
+                arg_table.set("name", name)?;
                 arg_table.set("args", args)?;
+                let fargs: Vec<String> = args.split_whitespace().map(|s| s.to_string()).collect();
+                arg_table.set("fargs", fargs)?;
+                arg_table.set("bang", false)?;
                 let _ = func.call::<()>(arg_table);
+                state.redraw();
             }
         }
         Ok(())
