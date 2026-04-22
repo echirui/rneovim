@@ -29,7 +29,7 @@ pub struct VimState {
     pub macro_recording: Option<(char, Vec<Request>)>,
     pub options: HashMap<String, OptionValue>,
 
-    pub autocmds: HashMap<AutoCmdEvent, Vec<String>>,
+    pub autocmds: HashMap<AutoCmdEvent, Vec<AutoCmd>>,
     pub user_commands: HashMap<String, mlua::RegistryKey>,
     pub abbreviations: HashMap<String, String>,
     pub highlighter: SyntaxHighlighter,
@@ -65,6 +65,17 @@ pub struct VimState {
     pub globals: HashMap<String, String>, // Simple global variables for now
     pub quit: bool,
     pub vim_did_enter: bool,
+}
+
+#[derive(Clone)]
+pub enum AutoCmdCallback {
+    Command(String),
+    Lua(Rc<mlua::RegistryKey>),
+}
+
+#[derive(Clone)]
+pub struct AutoCmd {
+    pub callback: AutoCmdCallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

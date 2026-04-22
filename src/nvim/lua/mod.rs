@@ -4,11 +4,11 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use crate::nvim::buffer::Buffer;
 use std::sync::mpsc::Sender;
-use crate::nvim::state::VimState;
+use crate::nvim::state::{VimState, AutoCmd, AutoCmdCallback, AutoCmdEvent};
 use crate::nvim::event::event_loop::EventCallback;
 
 pub struct LuaEnv {
-    lua: Lua,
+    pub(crate) lua: Lua,
 }
 
 struct StateWrapper(*mut VimState);
@@ -369,10 +369,35 @@ impl LuaEnv {
             Ok(())
         })?;
 
-        let nvim_create_autocmd = self.lua.create_function(|lua, (event, _opts): (mlua::Value, mlua::Table)| {
+        let nvim_create_autocmd = self.lua.create_function(|lua, (event_val, opts): (mlua::Value, mlua::Table)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
-                state.log(&format!("API nvim_create_autocmd(event={:?})", event));
+                
+                let events = match event_val {
+                    mlua::Value::String(s) => vec![s.to_string_lossy().to_string()],
+                    mlua::Value::Table(t) => t.sequence_values::<String>().filter_map(|v| v.ok()).collect(),
+                    _ => vec![],
+                };
+
+                state.log(&format!("API nvim_create_autocmd(events={:?})", events));
+                
+                let callback_opt = match opts.get::<mlua::Value>("callback") {
+                    Ok(mlua::Value::Function(f)) => Some(AutoCmdCallback::Lua(Rc::new(lua.create_registry_value(f)?))),
+                    _ => opts.get::<String>("command").ok().map(AutoCmdCallback::Command),
+                };
+
+                if let Some(callback) = callback_opt {
+                    for ev_str in events {
+                        let ev_type = match ev_str.as_str() {
+                            "VimEnter" => AutoCmdEvent::VimEnter,
+                            "BufReadPost" => AutoCmdEvent::BufReadPost,
+                            "BufWritePost" => AutoCmdEvent::BufWritePost,
+                            "BufEnter" => AutoCmdEvent::BufEnter,
+                            _ => continue,
+                        };
+                        state.autocmds.entry(ev_type).or_insert_with(Vec::new).push(AutoCmd { callback: callback.clone() });
+                    }
+                }
             }
             Ok(1)
         })?;
@@ -641,6 +666,18 @@ impl LuaEnv {
             let res = if std::env::var("PATH").unwrap_or_default().split(':').any(|p| std::path::Path::new(p).join(&name).exists()) { 1 } else { 0 };
             Ok(res)
         })?)?;
+        fn_table.set("argc", self.lua.create_function(|_, _: ()| { Ok(std::env::args().len().saturating_sub(1)) })?)?;
+        fn_table.set("argv", self.lua.create_function(|lua, idx: Option<usize>| {
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            if let Some(i) = idx { return Ok(mlua::Value::String(lua.create_string(&args.get(i).cloned().unwrap_or_default())?)); }
+            let t = lua.create_table()?;
+            for (i, a) in args.iter().enumerate() { t.set(i + 1, a.clone())?; }
+            Ok(mlua::Value::Table(t))
+        })?)?;
+        fn_table.set("exists", self.lua.create_function(|_, name: String| { Ok(if name.starts_with(':') { 2 } else { 0 }) })?)?;
+        fn_table.set("filereadable", self.lua.create_function(|_, path: String| { Ok(if std::path::Path::new(&path).is_file() { 1 } else { 0 }) })?)?;
+        fn_table.set("isdirectory", self.lua.create_function(|_, path: String| { Ok(if std::path::Path::new(&path).is_dir() { 1 } else { 0 }) })?)?;
+
         vim.set("fn", fn_table)?;
 
         let opt = self.lua.create_table()?;
@@ -807,6 +844,11 @@ impl LuaEnv {
                 state.redraw();
             }
         }
+    }
+
+    pub fn execute_callback(&self, key: &mlua::RegistryKey) -> Result<()> {
+        let func: mlua::Function = self.lua.registry_value(key).map_err(|e| NvimError::Api(format!("Failed to get callback: {}", e)))?;
+        func.call::<()>(()).map_err(|e| NvimError::Api(format!("Callback error: {}", e)))
     }
 
     pub fn trigger_on_line(&self) {

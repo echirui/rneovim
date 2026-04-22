@@ -6,9 +6,21 @@ use crate::nvim::os::fs;
 use crate::nvim::handlers;
 
 pub fn trigger_autocmd(state: &mut VimState, event: AutoCmdEvent) {
-    if let Some(cmds) = state.autocmds.get(&event).cloned() {
-        for cmd in cmds {
-            let _ = execute_cmd(state, &cmd);
+    state.log(&format!("TRIGGER_AUTOCMD: {:?}", event));
+    let cmds = if let Some(c) = state.autocmds.get(&event) { c.clone() } else { return; };
+    for cmd in cmds {
+        match cmd.callback {
+            crate::nvim::state::AutoCmdCallback::Command(c) => {
+                let _ = execute_cmd(state, &c);
+            }
+            crate::nvim::state::AutoCmdCallback::Lua(key) => {
+                state.log("TRIGGER_AUTOCMD: Executing Lua callback");
+                let env = state.lua_env.clone();
+                let lua_res = env.borrow().execute_callback(&key);
+                if let Err(e) = lua_res {
+                    state.log(&format!("TRIGGER_AUTOCMD: Lua error: {}", e));
+                }
+            }
         }
     }
 }
