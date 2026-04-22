@@ -383,7 +383,8 @@ impl LuaEnv {
                 _ => "".to_string(),
             })
         })?)?;
-        fn_table.set("fnamemodify", self.lua.create_function(|_, (path, modifier): (String, String)| {
+        fn_table.set("fnamemodify", self.lua.create_function(|_, (path_opt, modifier): (Option<String>, String)| {
+            let path = path_opt.unwrap_or_default();
             let mut res = std::path::PathBuf::from(&path);
             if modifier.contains(":p") {
                 if path.starts_with('~') { if let Some(home) = dirs::home_dir() { res = home.join(&path[2..]); } }
