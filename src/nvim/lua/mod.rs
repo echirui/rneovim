@@ -703,6 +703,24 @@ impl LuaEnv {
         })?)?;
         vim.set("trim", self.lua.create_function(|_, s: String| { Ok(s.trim().to_string()) })?)?;
         vim.set("inspect", self.lua.create_function(|_, v: Value| { Ok(format!("{:?}", v)) })?)?;
+
+        vim.set("deepcopy", self.lua.create_function(|lua, v: Value| {
+            fn deepcopy_val(lua: &Lua, v: Value) -> mlua::Result<Value> {
+                match v {
+                    Value::Table(t) => {
+                        let res = lua.create_table()?;
+                        for pair in t.pairs::<Value, Value>() {
+                            let (k, v) = pair?;
+                            res.set(deepcopy_val(lua, k)?, deepcopy_val(lua, v)?)?;
+                        }
+                        Ok(Value::Table(res))
+                    }
+                    _ => Ok(v),
+                }
+            }
+            deepcopy_val(lua, v)
+        })?)?;
+
         vim.set("in_fast_event", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
         vim.set("is_thread", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
 
