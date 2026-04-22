@@ -203,7 +203,7 @@ pub enum Request {
     MoveWord { forward: bool, end: bool },
     JumpToLineBoundary { end: bool },
     JumpToBufferBoundary { end: bool },
-    FindChar { forward: bool, target: char, till: bool },
+    FindChar { forward: bool, char: char, is_till: bool },
     ReplaceChar(char),
     SetMark(char),
     JumpToMark(char),

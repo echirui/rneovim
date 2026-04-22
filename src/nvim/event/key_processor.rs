@@ -81,6 +81,8 @@ impl KeyProcessor {
                 state.set_mode(Mode::Normal);
                 Some(Request::ReplaceChar(key))
             }
+            Mode::OperatorPending => self.handle_normal_mode(state, key),
+            Mode::Terminal => self.handle_terminal_mode(state, key),
         }
     }
 
@@ -141,10 +143,10 @@ impl KeyProcessor {
             (Some(op), None, '$') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::LineEnd, count }) }
             (Some(op), None, '0') => { state.pending_op = None; Some(Request::OpMotion { op, motion: Motion::LineStart, count }) }
 
-            (None, Some('f'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, target: key, till: false }) }
-            (None, Some('F'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, target: key, till: false }) }
-            (None, Some('t'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, target: key, till: true }) }
-            (None, Some('T'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, target: key, till: true }) }
+            (None, Some('f'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, char: key, is_till: false }) }
+            (None, Some('F'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, char: key, is_till: false }) }
+            (None, Some('t'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, char: key, is_till: true }) }
+            (None, Some('T'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, char: key, is_till: true }) }
             (None, Some('\x17'), key) => { // <C-W>
                 state.pending_key = None;
                 match key {
@@ -260,8 +262,8 @@ impl KeyProcessor {
             (None, None, '&') => Some(Request::ExecuteCommandFromConfig("&".to_string())),
             (None, None, ';') => Some(Request::RepeatLastCharSearch { count }),
             (None, None, ',') => {
-                if let Some(last) = state.last_char_search.clone() {
-                    Some(Request::FindChar { forward: !last.forward, target: last.target, till: last.till })
+                if let Some(Request::FindChar { forward, char, is_till }) = state.last_char_search.clone() {
+                    Some(Request::FindChar { forward: !forward, char, is_till })
                 } else { None }
             }
             (None, None, '%') => Some(Request::JumpToPair),
@@ -403,16 +405,16 @@ impl KeyProcessor {
             (None, 'i') | (None, 'a') | (None, '[') | (None, ']') | (None, 'g') | (None, 'f') | (None, 'F') | (None, 't') | (None, 'T') => { state.pending_key = Some(key); None }
             (None, ';') => Some(Request::RepeatLastCharSearch { count: 1 }),
             (None, ',') => {
-                if let Some(last) = state.last_char_search.clone() {
-                    Some(Request::FindChar { forward: !last.forward, target: last.target, till: last.till })
+                if let Some(Request::FindChar { forward, char, is_till }) = state.last_char_search.clone() {
+                    Some(Request::FindChar { forward: !forward, char, is_till })
                 } else { None }
             }
             (None, 'n') => Some(Request::SearchNext { forward: true, count: 1 }),
             (None, 'N') => Some(Request::SearchNext { forward: false, count: 1 }),
-            (Some('f'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, target: key, till: false }) }
-            (Some('F'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, target: key, till: false }) }
-            (Some('t'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, target: key, till: true }) }
-            (Some('T'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, target: key, till: true }) }
+            (Some('f'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, char: key, is_till: false }) }
+            (Some('F'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, char: key, is_till: false }) }
+            (Some('t'), _) => { state.pending_key = None; Some(Request::FindChar { forward: true, char: key, is_till: true }) }
+            (Some('T'), _) => { state.pending_key = None; Some(Request::FindChar { forward: false, char: key, is_till: true }) }
             (Some('g'), 'g') => { state.pending_key = None; Some(Request::OpMotion { op: Operator::None, motion: Motion::BufferStart, count: 1 }) }
             (Some('['), '[') => { state.pending_key = None; Some(Request::OpMotion { op: Operator::None, motion: Motion::SectionBackward, count: 1 }) }
             (Some(']'), ']') => { state.pending_key = None; Some(Request::OpMotion { op: Operator::None, motion: Motion::SectionForward, count: 1 }) }
@@ -451,6 +453,10 @@ impl KeyProcessor {
             }
             _ => None,
         }
+    }
+
+    fn handle_terminal_mode(&self, _state: &mut VimState, _key: char) -> Option<Request> {
+        None
     }
 
     fn handle_cmdline_mode(&self, state: &mut VimState, key: char) -> Option<Request> {

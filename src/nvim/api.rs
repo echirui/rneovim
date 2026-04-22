@@ -1,4 +1,5 @@
-use crate::nvim::state::{VimState, AutoCmdEvent, TabPage};
+use crate::nvim::state::{VimState, AutoCmdEvent};
+use crate::nvim::window::TabPage;
 use crate::nvim::request::Request;
 use crate::nvim::error::Result;
 use crate::nvim::os::fs;

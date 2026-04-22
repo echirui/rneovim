@@ -9,7 +9,7 @@ static NEXT_WINDOW_ID: AtomicI32 = AtomicI32::new(1);
 use serde::{Serialize, Deserialize};
 
 /// Represents a cursor position.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
     pub row: usize, // 1-based
     pub col: usize, // 0-based
@@ -36,7 +36,7 @@ pub struct Window {
     topline: usize,
     height: usize,
     width: usize,
-    config: Option<WinConfig>,
+    pub config: Option<WinConfig>,
     pub folds: Vec<(usize, usize)>,
 }
 
@@ -123,5 +123,20 @@ impl Window {
     pub fn scroll(&mut self, lines: i32) {
         let line_count = if let Ok(b) = self.buffer.try_borrow() { b.line_count() } else { 1000 };
         self.topline = (self.topline as i32 + lines).clamp(1, line_count as i32) as usize;
+    }
+}
+
+#[derive(Clone)]
+pub struct TabPage {
+    pub windows: Vec<Window>,
+    pub current_win_idx: usize,
+}
+
+impl TabPage {
+    pub fn new(win: Window) -> Self {
+        Self {
+            windows: vec![win],
+            current_win_idx: 0,
+        }
     }
 }

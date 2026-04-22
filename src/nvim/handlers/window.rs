@@ -31,7 +31,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             let buf = Rc::new(std::cell::RefCell::new(crate::nvim::buffer::Buffer::new()));
             let mut win = crate::nvim::window::Window::new(buf);
             win.set_height(20);
-            let tabpage = crate::nvim::state::TabPage::new(win);
+            let tabpage = crate::nvim::window::TabPage::new(win);
             state.tabpages.push(tabpage);
             state.current_tab_idx = state.tabpages.len() - 1;
         }
