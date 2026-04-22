@@ -285,6 +285,21 @@ impl LuaEnv {
             Ok(res)
         })?)?;
 
+        api.set("nvim_create_augroup", self.lua.create_function(|lua, (name, _opts): (String, Table)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("API nvim_create_augroup(name={})", name));
+            }
+            Ok(1)
+        })?)?;
+
+        api.set("nvim_del_augroup_by_id", self.lua.create_function(|_, _: i32| { Ok(()) })?)?;
+        api.set("nvim_del_augroup_by_name", self.lua.create_function(|_, _: String| { Ok(()) })?)?;
+
+        api.set("nvim_get_autocmds", self.lua.create_function(|lua, _opts: Table| {
+            Ok(lua.create_table()?)
+        })?)?;
+
         vim.set("api", api)?;
 
         // vim.fn
