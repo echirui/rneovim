@@ -334,14 +334,24 @@ impl LuaEnv {
         })?)?;
         fn_table.set("filereadable", self.lua.create_function(|_, path: String| { Ok(if std::path::Path::new(&path).is_file() { 1 } else { 0 }) })?)?;
         fn_table.set("isdirectory", self.lua.create_function(|_, path: String| { Ok(if std::path::Path::new(&path).is_dir() { 1 } else { 0 }) })?)?;
+        fn_table.set("mkdir", self.lua.create_function(|_, (path, _p): (String, Option<String>)| {
+            let _ = std::fs::create_dir_all(path);
+            Ok(1)
+        })?)?;
         vim.set("fn", fn_table)?;
 
         // vim.loop
         let loop_table = self.lua.create_table()?;
         loop_table.set("fs_stat", self.lua.create_function(|lua, path: String| {
-            if std::path::Path::new(&path).exists() {
-                let table = lua.create_table()?; table.set("type", "directory")?; Ok(Value::Table(table))
+            if let Ok(meta) = std::fs::metadata(&path) {
+                let table = lua.create_table()?;
+                table.set("type", if meta.is_dir() { "directory" } else { "file" })?;
+                Ok(Value::Table(table))
             } else { Ok(Value::Nil) }
+        })?)?;
+        loop_table.set("fs_mkdir", self.lua.create_function(|_, (path, _mode): (String, i32)| {
+            let _ = std::fs::create_dir_all(path);
+            Ok(true)
         })?)?;
         loop_table.set("fs_realpath", self.lua.create_function(|_, path: String| {
             Ok(std::fs::canonicalize(&path).map(|p| p.to_string_lossy().to_string()).ok())
