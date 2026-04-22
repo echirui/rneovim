@@ -29,6 +29,7 @@ pub fn find_project_root(path: &str) -> String {
 }
 
 pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
+    state.log(&format!("HANDLE_REQUEST: {:?}", req));
     if state.macro_recording.is_some() {
         match req {
             Request::StopMacroRecord | Request::PlayMacro(_) => {}
@@ -104,6 +105,7 @@ pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
 }
 
 pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
+    state.log(&format!("EXECUTE_CMD: {}", cmd));
     let cmd = cmd.trim();
     if cmd.is_empty() { return Ok(()); }
     
