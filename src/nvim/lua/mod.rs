@@ -51,10 +51,14 @@ impl LuaEnv {
     fn add_missing_tracker(lua: &Lua, table: &Table, prefix: &str) -> mlua::Result<()> {
         let meta = lua.create_table()?;
         let prefix = prefix.to_string();
-        meta.set("__index", lua.create_function(move |lua, (_t, k): (Table, String)| {
+        meta.set("__index", lua.create_function(move |lua, (_t, k): (Table, Value)| {
+            let key_str = match k {
+                Value::String(s) => s.to_string_lossy().to_string(),
+                _ => format!("{:?}", k),
+            };
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
-                state.log(&format!("MISSING API: {}.{}", prefix, k));
+                state.log(&format!("MISSING API: {}.{}", prefix, key_str));
             }
             Ok(Value::Nil)
         })?)?;
@@ -658,9 +662,6 @@ impl LuaEnv {
 
         // EXPOSE VIM TO GLOBALS
         globals.set("vim", vim.clone())?;
-
-        // Add missing API tracker last
-        let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
 
         Ok(())
     }
