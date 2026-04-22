@@ -52,7 +52,7 @@ impl LuaEnv {
         let meta = lua.create_table()?;
         let prefix = prefix.to_string();
         meta.set("__index", lua.create_function(move |lua, (_t, k): (Table, Value)| {
-            let key_str = match k {
+            let key_str = match &k {
                 Value::String(s) => s.to_string_lossy().to_string(),
                 _ => format!("{:?}", k),
             };
@@ -292,6 +292,7 @@ impl LuaEnv {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 let s = match val { Value::String(s) => s.to_string_lossy().to_string(), Value::Boolean(b) => b.to_string(), Value::Integer(i) => i.to_string(), _ => format!("{:?}", val) };
+                state.log(&format!("API nvim_set_var({}, {})", name, s));
                 state.globals.insert(name, s);
             }
             Ok(())
@@ -364,6 +365,7 @@ impl LuaEnv {
             Ok(())
         })?)?;
 
+        let _ = Self::add_missing_tracker(&self.lua, &api, "vim.api");
         vim.set("api", api)?;
 
         // vim.fn
@@ -417,6 +419,7 @@ impl LuaEnv {
             let _ = std::fs::create_dir_all(path);
             Ok(1)
         })?)?;
+        let _ = Self::add_missing_tracker(&self.lua, &fn_table, "vim.fn");
         vim.set("fn", fn_table)?;
 
         // vim.loop
@@ -450,6 +453,7 @@ impl LuaEnv {
             for (k, v) in std::env::vars() { res.set(k, v)?; }
             Ok(res)
         })?)?;
+        let _ = Self::add_missing_tracker(&self.lua, &loop_table, "vim.loop");
         vim.set("loop", &loop_table)?;
         vim.set("uv", loop_table)?;
 
@@ -457,7 +461,8 @@ impl LuaEnv {
         let opt = self.lua.create_table()?;
         let opt_meta = self.lua.create_table()?;
         let lua_ref = self.lua.clone();
-        opt_meta.set("__index", self.lua.create_function(move |lua, (_table, name): (Table, String)| {
+        opt_meta.set("__index", self.lua.create_function(move |lua, (_table, k): (Table, Value)| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(Value::Nil) };
             let inner_opt = lua.create_table()?;
             let name_p = name.clone(); let lua_p = lua_ref.clone();
             inner_opt.set("prepend", lua.create_function(move |lua, args: MultiValue| {
@@ -489,7 +494,7 @@ impl LuaEnv {
                 }
                 Ok(())
             })?)?;
-            Ok(inner_opt)
+            Ok(Value::Table(inner_opt))
         })?)?;
         let _ = opt.set_metatable(Some(opt_meta));
         vim.set("opt", opt)?;
@@ -506,17 +511,18 @@ impl LuaEnv {
         let cmd_table = self.lua.create_table()?;
         let cmd_meta = self.lua.create_table()?;
         cmd_meta.set("__call", self.lua.create_function(move |_lua, (_t, cmd): (Table, String)| { cmd_fn.call::<()>(cmd) })?)?;
-        cmd_meta.set("__index", self.lua.create_function(move |lua, (_t, k): (Table, String)| {
-            Ok(lua.create_function(move |lua, args: MultiValue| {
+        cmd_meta.set("__index", self.lua.create_function(move |lua, (_t, k): (Table, Value)| {
+            let key_str = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(Value::Nil) };
+            Ok(Value::Function(lua.create_function(move |lua, args: MultiValue| {
                 let arg_strs: Vec<String> = args.iter().map(|v| match v { Value::String(s) => s.to_string_lossy().to_string(), _ => format!("{:?}", v) }).collect();
-                let cmd = format!("{} {}", k, arg_strs.join(" "));
+                let cmd = format!("{} {}", key_str, arg_strs.join(" "));
                 if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                     let state = unsafe { &mut *wrapper.0 };
-                    state.log(&format!("API vim.cmd.{} called as function -> {}", k, cmd));
+                    state.log(&format!("API vim.cmd.{} called as function -> {}", key_str, cmd));
                     let _ = crate::nvim::api::execute_cmd(state, &cmd);
                 }
                 Ok(())
-            })?)
+            })?))
         })?)?;
         let _ = cmd_table.set_metatable(Some(cmd_meta));
         vim.set("cmd", cmd_table)?;
@@ -529,7 +535,8 @@ impl LuaEnv {
 
         let v = self.lua.create_table()?;
         let v_meta = self.lua.create_table()?;
-        v_meta.set("__index", self.lua.create_function(|lua, name: String| {
+        v_meta.set("__index", self.lua.create_function(|lua, k: Value| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(Value::Nil) };
             let did_enter = if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
                 state.vim_did_enter
@@ -542,22 +549,28 @@ impl LuaEnv {
         // vim.env
         let env_table = self.lua.create_table()?;
         let env_meta = self.lua.create_table()?;
-        env_meta.set("__index", self.lua.create_function(|lua, name: String| {
-            Ok(std::env::var(name).ok().map(|v| Value::String(lua.create_string(&v).unwrap())))
+        env_meta.set("__index", self.lua.create_function(|lua, k: Value| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(Value::Nil) };
+            Ok(match std::env::var(name) {
+                Ok(v) => Value::String(lua.create_string(&v)?),
+                Err(_) => Value::Nil,
+            })
         })?)?;
         let _ = env_table.set_metatable(Some(env_meta));
         vim.set("env", env_table)?;
 
         let g = self.lua.create_table()?;
         let g_meta = self.lua.create_table()?;
-        g_meta.set("__index", self.lua.create_function(|lua, (_t, name): (Table, String)| {
+        g_meta.set("__index", self.lua.create_function(|lua, (_t, k): (Table, Value)| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(Value::Nil) };
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
                 if let Some(val) = state.globals.get(&name) { return Ok(Value::String(lua.create_string(val)?)); }
             }
             Ok(Value::Nil)
         })?)?;
-        g_meta.set("__newindex", self.lua.create_function(|lua, (_t, name, val): (Table, String, Value)| {
+        g_meta.set("__newindex", self.lua.create_function(|lua, (_t, k, val): (Table, Value, Value)| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(()) };
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 let s = match val { Value::String(s) => s.to_string_lossy().to_string(), Value::Boolean(b) => b.to_string(), Value::Integer(i) => i.to_string(), _ => format!("{:?}", val) };
@@ -571,7 +584,8 @@ impl LuaEnv {
 
         let go = self.lua.create_table()?;
         let go_meta = self.lua.create_table()?;
-        go_meta.set("__index", self.lua.create_function(|lua, (_t, name): (Table, String)| {
+        go_meta.set("__index", self.lua.create_function(|lua, (_t, k): (Table, Value)| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(Value::Nil) };
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
                 if name == "columns" { return Ok(Value::Integer(state.grid.width as i64)); }
@@ -586,7 +600,8 @@ impl LuaEnv {
             }
             Ok(Value::Nil)
         })?)?;
-        go_meta.set("__newindex", self.lua.create_function(|lua, (_t, name, val): (Table, String, Value)| {
+        go_meta.set("__newindex", self.lua.create_function(|lua, (_t, k, val): (Table, Value, Value)| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(()) };
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 let v = match val {
