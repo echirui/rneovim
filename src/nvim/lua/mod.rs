@@ -441,6 +441,11 @@ impl LuaEnv {
         loop_table.set("os_homedir", self.lua.create_function(|_, _: ()| {
             Ok(dirs::home_dir().map(|p| p.to_string_lossy().to_string()))
         })?)?;
+        loop_table.set("os_environ", self.lua.create_function(|lua, _: ()| {
+            let res = lua.create_table()?;
+            for (k, v) in std::env::vars() { res.set(k, v)?; }
+            Ok(res)
+        })?)?;
         vim.set("loop", &loop_table)?;
         vim.set("uv", loop_table)?;
 
@@ -529,6 +534,15 @@ impl LuaEnv {
         })?)?;
         let _ = v.set_metatable(Some(v_meta));
         vim.set("v", v)?;
+
+        // vim.env
+        let env_table = self.lua.create_table()?;
+        let env_meta = self.lua.create_table()?;
+        env_meta.set("__index", self.lua.create_function(|lua, name: String| {
+            Ok(std::env::var(name).ok().map(|v| Value::String(lua.create_string(&v).unwrap())))
+        })?)?;
+        let _ = env_table.set_metatable(Some(env_meta));
+        vim.set("env", env_table)?;
 
         let g = self.lua.create_table()?;
         let g_meta = self.lua.create_table()?;
