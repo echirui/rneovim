@@ -642,6 +642,9 @@ impl LuaEnv {
         // EXPOSE VIM TO GLOBALS
         globals.set("vim", vim.clone())?;
 
+        // Add missing API tracker last
+        let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
+
         Ok(())
     }
 
