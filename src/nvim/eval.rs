@@ -49,6 +49,31 @@ impl EvalContext {
                 Err(NvimError::Api("strlen() expects a string".to_string()))
             }
         });
+
+        ctx.register_builtin("getline", |state, args| {
+            let lnum = match args.first() {
+                Some(TypVal::Number(n)) => *n as usize,
+                _ => return Err(NvimError::Api("getline() expects a line number".to_string())),
+            };
+            let buf = state.current_window().buffer();
+            let b = buf.borrow();
+            Ok(TypVal::String(b.get_line(lnum).unwrap_or("").to_string()))
+        });
+
+        ctx.register_builtin("setline", |state, args| {
+            let lnum = match args.get(0) {
+                Some(TypVal::Number(n)) => *n as usize,
+                _ => return Err(NvimError::Api("setline() expects a line number".to_string())),
+            };
+            let text = match args.get(1) {
+                Some(TypVal::String(s)) => s.clone(),
+                _ => return Err(NvimError::Api("setline() expects text".to_string())),
+            };
+            let buf = state.current_window().buffer();
+            let mut b = buf.borrow_mut();
+            let _ = b.set_line(lnum, 0, &text);
+            Ok(TypVal::Number(0))
+        });
         
         ctx
     }
