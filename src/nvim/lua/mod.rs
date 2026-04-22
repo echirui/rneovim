@@ -698,6 +698,40 @@ impl LuaEnv {
         let _ = g.set_metatable(Some(g_meta));
         vim.set("g", g)?;
 
+        // vim.go (Global Options)
+        let go = self.lua.create_table()?;
+        let go_meta = self.lua.create_table()?;
+        go_meta.set("__index", self.lua.create_function(|lua, (_t, name): (Table, String)| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if name == "columns" { return Ok(Value::Integer(state.grid.width as i64)); }
+                if name == "lines" { return Ok(Value::Integer(state.grid.height as i64)); }
+                if let Some(val) = state.options.get(&name) {
+                    match val {
+                        crate::nvim::state::OptionValue::Bool(b) => return Ok(Value::Boolean(*b)),
+                        crate::nvim::state::OptionValue::Int(i) => return Ok(Value::Integer(*i)),
+                        crate::nvim::state::OptionValue::String(s) => return Ok(Value::String(lua.create_string(s)?)),
+                    }
+                }
+            }
+            Ok(Value::Nil)
+        })?)?;
+        go_meta.set("__newindex", self.lua.create_function(|lua, (_t, name, val): (Table, String, Value)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                let v = match val {
+                    Value::Boolean(b) => crate::nvim::state::OptionValue::Bool(b),
+                    Value::Integer(i) => crate::nvim::state::OptionValue::Int(i),
+                    Value::String(s) => crate::nvim::state::OptionValue::String(s.to_string_lossy().to_string()),
+                    _ => return Ok(()),
+                };
+                state.options.insert(name, v);
+            }
+            Ok(())
+        })?)?;
+        let _ = go.set_metatable(Some(go_meta));
+        vim.set("go", go)?;
+
         Self::add_missing_tracker(&self.lua, &vim, "vim")?;
         globals.set("vim", vim)?;
         Ok(())
