@@ -316,7 +316,6 @@ impl VimState {
 
     pub fn set_cmdline(&mut self, text: String) {
         self.cmdline = text;
-        self.cmdline_cursor = self.cmdline.chars().count();
     }
 
     pub fn cmdline(&self) -> &str { &self.cmdline }
@@ -324,6 +323,10 @@ impl VimState {
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
         if mode == Mode::CommandLine || mode == Mode::Search {
+            self.cmdline.clear();
+            self.cmdline_cursor = 0;
+        } else {
+            // 他のモードに移行した際もコマンドライン状態をリセット
             self.cmdline.clear();
             self.cmdline_cursor = 0;
         }

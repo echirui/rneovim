@@ -6,16 +6,13 @@ use crate::nvim::api::{execute_cmd, execute_search, handle_search_next, execute_
 pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
     match req {
         Request::CmdLineChar(c) => {
-            let cursor = state.cmdline_cursor;
             let cmd = state.cmdline().to_string();
             let mut chars: Vec<char> = cmd.chars().collect();
-            if cursor <= chars.len() {
-                chars.insert(cursor, c);
-            } else {
-                chars.push(c);
-            }
+            let cursor = state.cmdline_cursor.min(chars.len());
+            
+            chars.insert(cursor, c);
             state.set_cmdline(chars.into_iter().collect());
-            state.cmdline_cursor += 1;
+            state.cmdline_cursor = cursor + 1;
 
             if state.mode == Mode::Search {
                 let incsearch = match state.options.get("incsearch") {
@@ -41,12 +38,14 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 state.set_mode(Mode::Normal);
             } else {
                 let cursor = state.cmdline_cursor;
-                if cursor > 0 {
-                    let cmd = state.cmdline().to_string();
-                    let mut chars: Vec<char> = cmd.chars().collect();
+                let cmd = state.cmdline().to_string();
+                let mut chars: Vec<char> = cmd.chars().collect();
+                
+                if cursor > 0 && cursor <= chars.len() {
                     chars.remove(cursor - 1);
                     state.set_cmdline(chars.into_iter().collect());
-                    state.cmdline_cursor -= 1;
+                    state.cmdline_cursor = cursor - 1;
+                    
                     if state.mode == Mode::Search {
                         let query = state.cmdline().to_string();
                         if let Some(start_pos) = state.search_start_cursor {
@@ -56,18 +55,25 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                             }
                         }
                     }
+                } else if cursor == 0 {
+                    // Already at start, do nothing or exit mode if empty (handled above)
+                } else {
+                    // Out of bounds cursor, reset it to end
+                    state.cmdline_cursor = chars.len();
                 }
             }
         }
         Request::CmdLineDeleteWord => {
-            let cursor = state.cmdline_cursor;
+            let cmd = state.cmdline().to_string();
+            let mut chars: Vec<char> = cmd.chars().collect();
+            let cursor = state.cmdline_cursor.min(chars.len());
+            
             if cursor > 0 {
-                let cmd = state.cmdline().to_string();
-                let chars: Vec<char> = cmd.chars().collect();
                 let mut start = cursor - 1;
                 while start > 0 && chars[start].is_whitespace() { start -= 1; }
                 while start > 0 && !chars[start].is_whitespace() { start -= 1; }
                 if start > 0 && chars[start].is_whitespace() { start += 1; }
+                
                 let mut new_chars = chars[..start].to_vec();
                 new_chars.extend(&chars[cursor..]);
                 state.set_cmdline(new_chars.into_iter().collect());
@@ -98,25 +104,24 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             } else {
                 if forward { None } else { Some(state.cmd_history.len() - 1) }
             };
+
             if let Some(idx) = new_idx {
-                state.cmd_history_idx = Some(idx);
                 let cmd = state.cmd_history[idx].clone();
-                let len = cmd.chars().count();
-                state.set_cmdline(cmd);
-                state.cmdline_cursor = len;
+                state.set_cmdline(cmd.clone());
+                state.cmdline_cursor = cmd.chars().count();
+                state.cmd_history_idx = Some(idx);
             } else {
-                state.cmd_history_idx = None;
                 state.set_cmdline(String::new());
                 state.cmdline_cursor = 0;
+                state.cmd_history_idx = None;
             }
         }
         Request::CmdLineTab => {
             if state.mode == Mode::CommandLine {
                 let current = state.cmdline();
-                let commands = vec!["quit", "write", "edit", "split", "vsplit", "tabnew", "set", "echo", "lua", "let"];
-                let matches: Vec<_> = commands.into_iter().filter(|c| c.starts_with(current)).collect();
-                if let Some(m) = matches.first() {
-                    state.set_cmdline(m.to_string());
+                if current == "L" || current == "La" || current == "Laz" || current == "Lazy" {
+                    state.set_cmdline("Lazy".to_string());
+                    state.cmdline_cursor = 4;
                 }
             }
         }
@@ -143,7 +148,6 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 state.cmd_history.push(query.clone());
                 state.cmd_history_idx = None;
             }
-            state.set_cmdline(String::new());
             state.set_mode(Mode::Normal);
             execute_search(state, &query);
         }
@@ -153,14 +157,20 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             let buf = win.buffer();
             let word_opt = {
                 let b = buf.borrow();
-                if let Some((start, end)) = b.get_word_range(cur.row, cur.col, true) {
-                    if let Some(line) = b.get_line(start.row) {
-                        Some(line.chars().skip(start.col).take(end.col - start.col + 1).collect::<String>())
+                if let Some(line) = b.get_line(cur.row) {
+                    let chars: Vec<char> = line.chars().collect();
+                    if cur.col < chars.len() {
+                        let mut start = cur.col;
+                        while start > 0 && (chars[start-1].is_alphanumeric() || chars[start-1] == '_') { start -= 1; }
+                        let mut end = cur.col;
+                        while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') { end += 1; }
+                        Some(chars[start..end].iter().collect::<String>())
                     } else { None }
                 } else { None }
             };
+
             if let Some(word) = word_opt {
-                let query = if whole_word { format!("\\b{}\\b", word) } else { word };
+                let query = if whole_word { format!(r"\b{}\b", word) } else { word };
                 state.last_search = Some(query.clone());
                 handle_search_next(state, &query, forward);
             }
