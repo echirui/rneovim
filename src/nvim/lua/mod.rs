@@ -370,6 +370,21 @@ impl LuaEnv {
             Ok(())
         })?)?;
 
+        api.set("nvim_list_uis", self.lua.create_function(|lua, _: ()| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                let ui = lua.create_table()?;
+                ui.set("width", state.grid.width)?;
+                ui.set("height", state.grid.height)?;
+                return Ok(vec![ui]);
+            }
+            Ok(Vec::new())
+        })?)?;
+
+        api.set("nvim_get_all_options_info", self.lua.create_function(|lua, _: ()| {
+            Ok(lua.create_table()?)
+        })?)?;
+
         let _ = Self::add_missing_tracker(&self.lua, &api, "vim.api");
         vim.set("api", api)?;
 
