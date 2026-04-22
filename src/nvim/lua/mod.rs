@@ -555,6 +555,8 @@ impl LuaEnv {
         })?)?;
         vim.set("trim", self.lua.create_function(|_, s: String| { Ok(s.trim().to_string()) })?)?;
         vim.set("inspect", self.lua.create_function(|_, v: Value| { Ok(format!("{:?}", v)) })?)?;
+        vim.set("in_fast_event", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
+        vim.set("is_thread", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
 
         // EXPOSE VIM TO GLOBALS
         globals.set("vim", vim.clone())?;
