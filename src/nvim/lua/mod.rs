@@ -324,7 +324,7 @@ impl LuaEnv {
                 let state = unsafe { &*wrapper.0 };
                 state.log(&format!("API vim.fn.has({})", name));
             }
-            Ok(match name.as_str() { "nvim-0.9.0" | "nvim-0.8.0" | "nvim" | "unix" | "mac" => true, _ => false })
+            Ok(match name.as_str() { "nvim-0.9.0" | "nvim-0.8.0" | "nvim" |  "unix" | "mac" => 1,  _ => 0 })
         })?)?;
         fn_table.set("executable", self.lua.create_function(|_, name: String| {
             Ok(if std::env::var("PATH").unwrap_or_default().split(':').any(|p| std::path::Path::new(p).join(&name).exists()) { 1 } else { 0 })
@@ -439,6 +439,17 @@ impl LuaEnv {
             t.set("major", 0)?; t.set("minor", 9)?; t.set("patch", 0)?;
             Ok(t)
         })?)?;
+
+        // vim.log
+        let log = self.lua.create_table()?;
+        let levels = self.lua.create_table()?;
+        levels.set("TRACE", 0)?;
+        levels.set("DEBUG", 1)?;
+        levels.set("INFO", 2)?;
+        levels.set("WARN", 3)?;
+        levels.set("ERROR", 4)?;
+        log.set("levels", levels)?;
+        vim.set("log", log)?;
 
         // vim.v
         let v = self.lua.create_table()?;

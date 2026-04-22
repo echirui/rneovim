@@ -148,6 +148,7 @@ impl VimState {
         options.insert("showmode".to_string(), OptionValue::Bool(true));
         options.insert("cursorline".to_string(), OptionValue::Bool(false));
         options.insert("signcolumn".to_string(), OptionValue::String("auto".to_string()));
+        options.insert("loadplugins".to_string(), OptionValue::Bool(true));
         
         let mut rtp = Vec::new();
         if let Some(config) = dirs::config_dir() {

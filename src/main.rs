@@ -101,6 +101,12 @@ fn main() {
     print!("\x1B[2J\x1B[H\x1B[?25l\x1B[?1000h\x1B[?1006h");
     state.redraw();
 
+    let bufs = state.buffers.clone();
+    let s = state.sender.clone();
+    if let Err(e) = state.lua_env.borrow().register_api(bufs, s) {
+        state.log(&format!("Failed to register API: {}", e));
+    }
+
     state.init_plugins();
     state.vim_did_enter = true;
     rneovim::nvim::api::trigger_autocmd(&mut state, rneovim::nvim::state::AutoCmdEvent::VimEnter);
