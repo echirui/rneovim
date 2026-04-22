@@ -103,7 +103,7 @@ fn main() {
 
     let bufs = state.buffers.clone();
     let s = state.sender.clone();
-    if let Err(e) = state.lua_env.borrow().register_api(bufs, s) {
+    if let Err(e) = state.lua_env.borrow_mut().register_api(bufs, s) {
         state.log(&format!("Failed to register API: {}", e));
     }
 

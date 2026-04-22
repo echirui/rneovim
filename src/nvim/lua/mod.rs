@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use crate::nvim::buffer::Buffer;
 use std::sync::mpsc::Sender;
-use crate::nvim::state::{VimState, AutoCmd, AutoCmdCallback, AutoCmdEvent};
+use crate::nvim::state::{VimState, AutoCmd, AutoCmdCallback, AutoCmdEvent, OptionValue};
 use crate::nvim::window::TabPage;
 use crate::nvim::event::event_loop::EventCallback;
 
@@ -48,21 +48,7 @@ impl LuaEnv {
         Ok(())
     }
 
-    fn add_missing_tracker(lua: &Lua, table: &Table, prefix: &str) -> mlua::Result<()> {
-        let meta = lua.create_table()?;
-        let prefix = prefix.to_string();
-        meta.set("__index", lua.create_function(move |lua, (_t, k): (Table, String)| {
-            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
-                let state = unsafe { &*wrapper.0 };
-                state.log(&format!("MISSING API: {}.{}", prefix, k));
-            }
-            Ok(Value::Nil)
-        })?)?;
-        let _ = table.set_metatable(Some(meta));
-        Ok(())
-    }
-
-    pub fn register_api(&self, _buffers: Vec<Rc<RefCell<Buffer>>>, sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
+    pub fn register_api(&mut self, _buffers: Vec<Rc<RefCell<Buffer>>>, _sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
         let globals = self.lua.globals();
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
@@ -299,7 +285,6 @@ impl LuaEnv {
             Ok(res)
         })?)?;
 
-        let _ = Self::add_missing_tracker(&self.lua, &api, "vim.api");
         vim.set("api", api)?;
 
         // vim.fn
@@ -324,7 +309,7 @@ impl LuaEnv {
                 let state = unsafe { &*wrapper.0 };
                 state.log(&format!("API vim.fn.has({})", name));
             }
-            Ok(match name.as_str() { "nvim-0.9.0" | "nvim-0.8.0" | "nvim" |  "unix" | "mac" => 1,  _ => 0 })
+            Ok(match name.as_str() { "nvim-0.9.0" | "nvim-0.8.0" | "nvim" | "unix" | "mac" => 1, _ => 0 })
         })?)?;
         fn_table.set("executable", self.lua.create_function(|_, name: String| {
             Ok(if std::env::var("PATH").unwrap_or_default().split(':').any(|p| std::path::Path::new(p).join(&name).exists()) { 1 } else { 0 })
@@ -337,10 +322,18 @@ impl LuaEnv {
             for (i, a) in args.iter().enumerate() { t.set(i + 1, lua.create_string(a)?)?; }
             Ok(Value::Table(t))
         })?)?;
+        fn_table.set("exists", self.lua.create_function(|lua, name: String| { 
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                if name.starts_with(':') {
+                    if state.user_commands.contains_key(&name[1..]) { return Ok(2); }
+                    return Ok(0);
+                }
+            }
+            Ok(0)
+        })?)?;
         fn_table.set("filereadable", self.lua.create_function(|_, path: String| { Ok(if std::path::Path::new(&path).is_file() { 1 } else { 0 }) })?)?;
         fn_table.set("isdirectory", self.lua.create_function(|_, path: String| { Ok(if std::path::Path::new(&path).is_dir() { 1 } else { 0 }) })?)?;
-        
-        let _ = Self::add_missing_tracker(&self.lua, &fn_table, "vim.fn");
         vim.set("fn", fn_table)?;
 
         // vim.loop
@@ -360,8 +353,6 @@ impl LuaEnv {
             table.set("sysname", std::env::consts::OS)?; table.set("machine", std::env::consts::ARCH)?;
             Ok(table)
         })?)?;
-        
-        let _ = Self::add_missing_tracker(&self.lua, &loop_table, "vim.loop");
         vim.set("loop", &loop_table)?;
         vim.set("uv", loop_table)?;
 
@@ -433,25 +424,12 @@ impl LuaEnv {
         let _ = cmd_table.set_metatable(Some(cmd_meta));
         vim.set("cmd", cmd_table)?;
 
-        // vim.version
         vim.set("version", self.lua.create_function(|lua, _: ()| {
             let t = lua.create_table()?;
             t.set("major", 0)?; t.set("minor", 9)?; t.set("patch", 0)?;
             Ok(t)
         })?)?;
 
-        // vim.log
-        let log = self.lua.create_table()?;
-        let levels = self.lua.create_table()?;
-        levels.set("TRACE", 0)?;
-        levels.set("DEBUG", 1)?;
-        levels.set("INFO", 2)?;
-        levels.set("WARN", 3)?;
-        levels.set("ERROR", 4)?;
-        log.set("levels", levels)?;
-        vim.set("log", log)?;
-
-        // vim.v
         let v = self.lua.create_table()?;
         let v_meta = self.lua.create_table()?;
         v_meta.set("__index", self.lua.create_function(|lua, name: String| {
@@ -464,7 +442,6 @@ impl LuaEnv {
         let _ = v.set_metatable(Some(v_meta));
         vim.set("v", v)?;
 
-        // vim.g
         let g = self.lua.create_table()?;
         let g_meta = self.lua.create_table()?;
         g_meta.set("__index", self.lua.create_function(|lua, (_t, name): (Table, String)| {
@@ -486,7 +463,6 @@ impl LuaEnv {
         let _ = g.set_metatable(Some(g_meta));
         vim.set("g", g)?;
 
-        // vim.go
         let go = self.lua.create_table()?;
         let go_meta = self.lua.create_table()?;
         go_meta.set("__index", self.lua.create_function(|lua, (_t, name): (Table, String)| {
@@ -496,9 +472,9 @@ impl LuaEnv {
                 if name == "lines" { return Ok(Value::Integer(state.grid.height as i64)); }
                 if let Some(val) = state.options.get(&name) {
                     match val {
-                        crate::nvim::state::OptionValue::Bool(b) => return Ok(Value::Boolean(*b)),
-                        crate::nvim::state::OptionValue::Int(i) => return Ok(Value::Integer(*i)),
-                        crate::nvim::state::OptionValue::String(s) => return Ok(Value::String(lua.create_string(s)?)),
+                        OptionValue::Bool(b) => return Ok(Value::Boolean(*b)),
+                        OptionValue::Int(i) => return Ok(Value::Integer(*i)),
+                        OptionValue::String(s) => return Ok(Value::String(lua.create_string(s)?)),
                     }
                 }
             }
@@ -508,9 +484,9 @@ impl LuaEnv {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 let v = match val {
-                    Value::Boolean(b) => crate::nvim::state::OptionValue::Bool(b),
-                    Value::Integer(i) => crate::nvim::state::OptionValue::Int(i),
-                    Value::String(s) => crate::nvim::state::OptionValue::String(s.to_string_lossy().to_string()),
+                    Value::Boolean(b) => OptionValue::Bool(b),
+                    Value::Integer(i) => OptionValue::Int(i),
+                    Value::String(s) => OptionValue::String(s.to_string_lossy().to_string()),
                     _ => return Ok(()),
                 };
                 state.options.insert(name, v);
@@ -520,42 +496,44 @@ impl LuaEnv {
         let _ = go.set_metatable(Some(go_meta));
         vim.set("go", go)?;
 
+        let log = self.lua.create_table()?;
+        let levels = self.lua.create_table()?;
+        levels.set("TRACE", 0)?; levels.set("DEBUG", 1)?; levels.set("INFO", 2)?; levels.set("WARN", 3)?; levels.set("ERROR", 4)?;
+        log.set("levels", levels)?;
+        vim.set("log", log)?;
+
+        // HELPER FUNCTIONS
+        vim.set("tbl_extend", self.lua.create_function(|lua, (_behavior, args): (String, MultiValue)| {
+            let res = lua.create_table()?;
+            for val in args { if let Value::Table(t) = val { for pair in t.pairs::<Value, Value>() { let (k, v) = pair?; res.set(k, v)?; } } }
+            Ok(res)
+        })?)?;
+        vim.set("tbl_deep_extend", vim.get::<Value>("tbl_extend")?)?;
+        vim.set("split", self.lua.create_function(|lua, (s, sep): (String, String)| {
+            let res = lua.create_table()?;
+            for (i, part) in s.split(&sep).enumerate() { res.set(i + 1, part)?; }
+            Ok(res)
+        })?)?;
+        vim.set("trim", self.lua.create_function(|_, s: String| { Ok(s.trim().to_string()) })?)?;
+        vim.set("inspect", self.lua.create_function(|_, v: Value| { Ok(format!("{:?}", v)) })?)?;
+
         // EXPOSE VIM TO GLOBALS
         globals.set("vim", vim.clone())?;
 
-        // jit table (mock or real)
+        // jit table
         let jit = self.lua.create_table()?;
         jit.set("version", "LuaJIT 2.1.0-beta3")?;
         globals.set("jit", jit)?;
 
-        // HELPER FUNCTIONS (implemented in Rust)
-        vim.set("tbl_extend", self.lua.create_function(|lua, (behavior, args): (String, MultiValue)| {
-            let res = lua.create_table()?;
-            for val in args {
-                if let Value::Table(t) = val {
-                    for pair in t.pairs::<Value, Value>() {
-                        let (k, v) = pair?;
-                        res.set(k, v)?;
-                    }
-                }
-            }
-            Ok(res)
+        // mock ffi
+        let package: Table = globals.get("package")?;
+        let preload: Table = package.get("preload")?;
+        preload.set("ffi", self.lua.create_function(|lua, _: ()| {
+            let ffi = lua.create_table()?;
+            ffi.set("os", std::env::consts::OS)?;
+            ffi.set("arch", std::env::consts::ARCH)?;
+            Ok(ffi)
         })?)?;
-        vim.set("tbl_deep_extend", vim.get::<Value>("tbl_extend")?)?;
-        
-        vim.set("split", self.lua.create_function(|lua, (s, sep): (String, String)| {
-            let res = lua.create_table()?;
-            for (i, part) in s.split(&sep).enumerate() {
-                res.set(i + 1, part)?;
-            }
-            Ok(res)
-        })?)?;
-
-        vim.set("trim", self.lua.create_function(|_, s: String| { Ok(s.trim().to_string()) })?)?;
-        vim.set("inspect", self.lua.create_function(|_, v: Value| { Ok(format!("{:?}", v)) })?)?;
-
-        // Add missing API tracker last
-        let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
 
         Ok(())
     }
