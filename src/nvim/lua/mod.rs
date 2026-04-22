@@ -62,7 +62,7 @@ impl LuaEnv {
         Ok(())
     }
 
-    pub fn register_api(&self, _buffers: Vec<Rc<RefCell<Buffer>>>, _sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
+    pub fn register_api(&self, _buffers: Vec<Rc<RefCell<Buffer>>>, sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
         let globals = self.lua.globals();
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
@@ -79,7 +79,7 @@ impl LuaEnv {
         globals.set("print", print.clone())?;
         vim.set("notify", print.clone())?;
 
-        let nvim_err_writeln = self.lua.create_function(|lua, msg: String| {
+        api.set("nvim_err_writeln", self.lua.create_function(|lua, msg: String| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 state.log(&format!("LUA nvim_err_writeln: {}", msg));
@@ -87,8 +87,7 @@ impl LuaEnv {
                 state.redraw();
             }
             Ok(())
-        })?;
-        api.set("nvim_err_writeln", nvim_err_writeln)?;
+        })?)?;
 
         api.set("nvim_command", self.lua.create_function(|lua, cmd: String| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
@@ -279,8 +278,7 @@ impl LuaEnv {
             Ok(1)
         })?)?;
 
-        api.set("nvim_get_runtime_file", self.lua.create_function(|_lua, (pattern, _): (String, bool)| { 
-            // 簡易実装
+        api.set("nvim_get_runtime_file", self.lua.create_function(|_lua, (_pattern, _): (String, bool)| { 
             Ok(Vec::<String>::new()) 
         })?)?;
 
@@ -329,16 +327,6 @@ impl LuaEnv {
         fn_table.set("executable", self.lua.create_function(|_, name: String| {
             Ok(if std::env::var("PATH").unwrap_or_default().split(':').any(|p| std::path::Path::new(p).join(&name).exists()) { 1 } else { 0 })
         })?)?;
-        fn_table.set("exists", self.lua.create_function(|lua, name: String| { 
-            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
-                let state = unsafe { &*wrapper.0 };
-                if name.starts_with(':') {
-                    if state.user_commands.contains_key(&name[1..]) { return Ok(2); }
-                    return Ok(0);
-                }
-            }
-            Ok(0)
-        })?)?;
         fn_table.set("argc", self.lua.create_function(|_, _: ()| { Ok(std::env::args().len().saturating_sub(1)) })?)?;
         fn_table.set("argv", self.lua.create_function(|lua, idx: Option<usize>| {
             let args: Vec<String> = std::env::args().skip(1).collect();
@@ -359,6 +347,9 @@ impl LuaEnv {
             if std::path::Path::new(&path).exists() {
                 let table = lua.create_table()?; table.set("type", "directory")?; Ok(Value::Table(table))
             } else { Ok(Value::Nil) }
+        })?)?;
+        loop_table.set("fs_realpath", self.lua.create_function(|_, path: String| {
+            Ok(std::fs::canonicalize(&path).map(|p| p.to_string_lossy().to_string()).ok())
         })?)?;
         loop_table.set("hrtime", self.lua.create_function(|_, _: ()| { Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64) })?)?;
         loop_table.set("cwd", self.lua.create_function(|_, _: ()| { Ok(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string()) })?)?;
@@ -435,24 +426,6 @@ impl LuaEnv {
         let _ = cmd_table.set_metatable(Some(cmd_meta));
         vim.set("cmd", cmd_table)?;
 
-        // Lua helper functions for vim table
-        self.lua.load(r#"
-            vim.tbl_extend = function(behavior, ...)
-                local res = {}
-                local args = {...}
-                for i = 1, #args do
-                    local t = args[i]
-                    if t then
-                        for k, v in pairs(t) do
-                            res[k] = v
-                        end
-                    end
-                end
-                return res
-            end
-            vim.tbl_deep_extend = vim.tbl_extend
-        "#).exec()?;
-
         vim.set("version", self.lua.create_function(|lua, _: ()| {
             let t = lua.create_table()?;
             t.set("major", 0)?; t.set("minor", 9)?; t.set("patch", 0)?;
@@ -484,6 +457,7 @@ impl LuaEnv {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
                 let s = match val { Value::String(s) => s.to_string_lossy().to_string(), Value::Boolean(b) => b.to_string(), Value::Integer(i) => i.to_string(), _ => format!("{:?}", val) };
+                state.log(&format!("API vim.g.{} = {}", name, s));
                 state.globals.insert(name, s);
             }
             Ok(())
@@ -525,7 +499,26 @@ impl LuaEnv {
         vim.set("go", go)?;
 
         let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
-        globals.set("vim", vim)?;
+        globals.set("vim", vim.clone())?;
+
+        // Lua helper functions for vim table - NOW CALLED AFTER globals.set("vim")
+        self.lua.load(r#"
+            vim.tbl_extend = function(behavior, ...)
+                local res = {}
+                local args = {...}
+                for i = 1, #args do
+                    local t = args[i]
+                    if t then
+                        for k, v in pairs(t) do
+                            res[k] = v
+                        end
+                    end
+                end
+                return res
+            end
+            vim.tbl_deep_extend = vim.tbl_extend
+        "#).exec()?;
+
         Ok(())
     }
 
