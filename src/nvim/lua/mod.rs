@@ -411,12 +411,13 @@ impl LuaEnv {
         })?;
 
         let nvim_get_vvar = self.lua.create_function(|lua, name: String| {
-            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+            let did_enter = if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
-                state.log(&format!("API nvim_get_vvar(name={})", name));
-            }
+                state.vim_did_enter
+            } else { false };
+
             match name.as_str() {
-                "vim_did_enter" => Ok(mlua::Value::Integer(1)),
+                "vim_did_enter" => Ok(mlua::Value::Integer(if did_enter { 1 } else { 0 })),
                 _ => Ok(mlua::Value::Nil),
             }
         })?;
@@ -709,12 +710,13 @@ impl LuaEnv {
         let v = self.lua.create_table()?;
         let v_meta = self.lua.create_table()?;
         v_meta.set("__index", self.lua.create_function(|lua, name: String| {
-            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+            let did_enter = if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
-                state.log(&format!("API vim.v.{}", name));
-            }
+                state.vim_did_enter
+            } else { false };
+
             match name.as_str() {
-                "vim_did_enter" => Ok(mlua::Value::Integer(1)),
+                "vim_did_enter" => Ok(mlua::Value::Integer(if did_enter { 1 } else { 0 })),
                 _ => Ok(mlua::Value::Nil),
             }
         })?)?;

@@ -102,6 +102,7 @@ fn main() {
     state.redraw();
 
     state.init_plugins();
+    state.vim_did_enter = true;
     rneovim::nvim::api::trigger_autocmd(&mut state, rneovim::nvim::state::AutoCmdEvent::VimEnter);
     state.redraw();
 
