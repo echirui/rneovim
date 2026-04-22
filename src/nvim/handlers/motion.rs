@@ -428,6 +428,14 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         Request::CenterCursor => state.current_window_mut().center_cursor(),
         Request::CursorToTop => state.current_window_mut().cursor_to_top(),
         Request::CursorToBottom => state.current_window_mut().cursor_to_bottom(),
+        Request::MoveWord { forward, end } => {
+            let motion = if end { Motion::WordForwardEnd } else if forward { Motion::WordForward } else { Motion::WordBackward };
+            handle(state, Request::OpMotion { op: Operator::None, motion, count: 1 })?;
+        }
+        Request::JumpToLineBoundary { end } => {
+            let motion = if end { Motion::LineEnd } else { Motion::LineStart };
+            handle(state, Request::OpMotion { op: Operator::None, motion, count: 1 })?;
+        }
         _ => {}
     }
     Ok(())
