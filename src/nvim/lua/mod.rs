@@ -509,6 +509,20 @@ impl LuaEnv {
             Ok(res)
         })?)?;
         vim.set("tbl_deep_extend", vim.get::<Value>("tbl_extend")?)?;
+
+        vim.set("tbl_get", self.lua.create_function(|_, (t, keys): (Table, MultiValue)| {
+            let mut current = Value::Table(t);
+            for key in keys {
+                if let Value::Table(tbl) = current {
+                    current = tbl.get(key)?;
+                    if current == Value::Nil { return Ok(Value::Nil); }
+                } else {
+                    return Ok(Value::Nil);
+                }
+            }
+            Ok(current)
+        })?)?;
+
         vim.set("split", self.lua.create_function(|lua, (s, sep): (String, String)| {
             let res = lua.create_table()?;
             for (i, part) in s.split(&sep).enumerate() { res.set(i + 1, part)?; }
