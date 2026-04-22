@@ -398,6 +398,17 @@ impl VimState {
     pub fn get_option_bool(&self, name: &str) -> bool {
         match self.options.get(name) { Some(OptionValue::Bool(b)) => *b, _ => false }
     }
+
+    pub fn log(&self, msg: &str) {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("rneovim.log") 
+        {
+            let _ = writeln!(file, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), msg);
+        }
+    }
 }
 
 #[cfg(test)]
