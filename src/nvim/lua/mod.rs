@@ -502,6 +502,37 @@ impl LuaEnv {
             })?)?;
             Ok(Value::Table(inner_opt))
         })?)?;
+        
+        let lua_ref_new = self.lua.clone();
+        opt_meta.set("__newindex", self.lua.create_function(move |lua, (_table, k, v): (Table, Value, Value)| {
+            let name = match k { Value::String(s) => s.to_string_lossy().to_string(), _ => return Ok(()) };
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("API vim.opt.{} = {:?}", name, v));
+                
+                let opt_val = match v {
+                    Value::Boolean(b) => OptionValue::Bool(b),
+                    Value::Integer(i) => OptionValue::Int(i),
+                    Value::String(s) => OptionValue::String(s.to_string_lossy().to_string()),
+                    Value::Table(t) => {
+                        // テーブルの場合は要素をカンマ区切りで結合（rtp等）
+                        let mut vals = Vec::new();
+                        for val in t.sequence_values::<Value>() {
+                            if let Ok(Value::String(s)) = val { vals.push(s.to_string_lossy().to_string()); }
+                        }
+                        OptionValue::String(vals.join(","))
+                    }
+                    _ => return Ok(()),
+                };
+
+                state.options.insert(name.clone(), opt_val.clone());
+                if name == "rtp" || name == "runtimepath" {
+                    if let OptionValue::String(rtp) = opt_val { let _ = Self::sync_package_path(&lua_ref_new, &rtp); }
+                }
+            }
+            Ok(())
+        })?)?;
+        
         let _ = opt.set_metatable(Some(opt_meta));
         vim.set("opt", opt)?;
 
