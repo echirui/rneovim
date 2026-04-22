@@ -16,7 +16,12 @@ struct StateWrapper(*mut VimState);
 
 impl LuaEnv {
     pub fn new() -> Self {
-        let lua = Lua::new();
+        let lua = unsafe {
+            Lua::unsafe_new_with(
+                mlua::StdLib::ALL_SAFE | mlua::StdLib::DEBUG,
+                mlua::LuaOptions::default(),
+            )
+        };
         Self { lua }
     }
 
