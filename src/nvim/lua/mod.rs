@@ -222,7 +222,7 @@ impl LuaEnv {
         let nvim_buf_get_option = self.lua.create_function(|lua, (buf_id, name): (i32, String)| {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
-                if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
+                if let Some(_buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
                     match name.as_str() {
                         "filetype" => return Ok(mlua::Value::String(lua.create_string("text")?)),
                         "buftype" => return Ok(mlua::Value::String(lua.create_string("")?)),
