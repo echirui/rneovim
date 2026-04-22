@@ -523,6 +523,11 @@ impl LuaEnv {
         // EXPOSE VIM TO GLOBALS
         globals.set("vim", vim.clone())?;
 
+        // jit table (mock or real)
+        let jit = self.lua.create_table()?;
+        jit.set("version", "LuaJIT 2.1.0-beta3")?;
+        globals.set("jit", jit)?;
+
         // HELPER FUNCTIONS (implemented in Rust)
         vim.set("tbl_extend", self.lua.create_function(|lua, (behavior, args): (String, MultiValue)| {
             let res = lua.create_table()?;
