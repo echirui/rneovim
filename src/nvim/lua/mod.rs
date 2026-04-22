@@ -48,6 +48,20 @@ impl LuaEnv {
         Ok(())
     }
 
+    fn add_missing_tracker(lua: &Lua, table: &Table, prefix: &str) -> mlua::Result<()> {
+        let meta = lua.create_table()?;
+        let prefix = prefix.to_string();
+        meta.set("__index", lua.create_function(move |lua, (_t, k): (Table, String)| {
+            if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &*wrapper.0 };
+                state.log(&format!("MISSING API: {}.{}", prefix, k));
+            }
+            Ok(Value::Nil)
+        })?)?;
+        let _ = table.set_metatable(Some(meta));
+        Ok(())
+    }
+
     pub fn register_api(&mut self, _buffers: Vec<Rc<RefCell<Buffer>>>, _sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
         let globals = self.lua.globals();
         let vim = self.lua.create_table()?;
@@ -298,6 +312,52 @@ impl LuaEnv {
 
         api.set("nvim_get_autocmds", self.lua.create_function(|lua, _opts: Table| {
             Ok(lua.create_table()?)
+        })?)?;
+
+        api.set("nvim_create_namespace", self.lua.create_function(|lua, name: String| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("API nvim_create_namespace(name={})", name));
+            }
+            Ok(1)
+        })?)?;
+
+        api.set("nvim_buf_add_highlight", self.lua.create_function(|lua, (buf, ns, hl, line, _s, _e): (i32, i32, String, usize, usize, usize)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("API nvim_buf_add_highlight(buf={}, ns={}, hl={}, line={})", buf, ns, hl, line));
+            }
+            Ok(0)
+        })?)?;
+
+        api.set("nvim_buf_set_extmark", self.lua.create_function(|lua, (buf, ns, line, col, _opts): (i32, i32, usize, usize, Table)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("API nvim_buf_set_extmark(buf={}, ns={}, line={}, col={})", buf, ns, line, col));
+            }
+            Ok(1)
+        })?)?;
+
+        api.set("nvim_buf_clear_namespace", self.lua.create_function(|_, _: (i32, i32, i32, i32)| { Ok(()) })?)?;
+        api.set("nvim_replace_termcodes", self.lua.create_function(|_, (str, _, _, _): (String, bool, bool, bool)| { Ok(str) })?)?;
+        api.set("nvim_clear_autocmds", self.lua.create_function(|lua, opts: Table| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("API nvim_clear_autocmds(opts={:?})", opts));
+            }
+            Ok(())
+        })?)?;
+
+        api.set("nvim_echo", self.lua.create_function(|lua, (chunks, _history, _opts): (Vec<Table>, bool, Table)| {
+            let mut msg = String::new();
+            for chunk in chunks { if let Ok(text) = chunk.get::<String>(1) { msg.push_str(&text); } }
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("API nvim_echo: {}", msg));
+                state.messages.push(msg);
+                state.redraw();
+            }
+            Ok(())
         })?)?;
 
         vim.set("api", api)?;
@@ -558,22 +618,14 @@ impl LuaEnv {
         vim.set("in_fast_event", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
         vim.set("is_thread", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
 
-        // EXPOSE VIM TO GLOBALS
-        globals.set("vim", vim.clone())?;
-
         // jit table
         let jit = self.lua.create_table()?;
         jit.set("version", "LuaJIT 2.1.0-beta3")?;
         jit.set("os", match std::env::consts::OS {
-            "macos" => "OSX",
-            "windows" => "Windows",
-            "linux" => "Linux",
-            _ => std::env::consts::OS,
+            "macos" => "OSX", "windows" => "Windows", "linux" => "Linux", _ => std::env::consts::OS,
         })?;
         jit.set("arch", match std::env::consts::ARCH {
-            "x86_64" => "x64",
-            "aarch64" => "arm64",
-            _ => std::env::consts::ARCH,
+            "x86_64" => "x64", "aarch64" => "arm64", _ => std::env::consts::ARCH,
         })?;
         globals.set("jit", jit)?;
 
@@ -586,6 +638,9 @@ impl LuaEnv {
             ffi.set("arch", std::env::consts::ARCH)?;
             Ok(ffi)
         })?)?;
+
+        // EXPOSE VIM TO GLOBALS
+        globals.set("vim", vim.clone())?;
 
         Ok(())
     }
