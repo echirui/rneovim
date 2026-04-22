@@ -67,6 +67,7 @@ impl LuaEnv {
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
 
+        // print / notify
         let print = self.lua.create_function(|lua, msg: String| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -79,6 +80,7 @@ impl LuaEnv {
         globals.set("print", print.clone())?;
         vim.set("notify", print.clone())?;
 
+        // nvim_* APIs
         api.set("nvim_err_writeln", self.lua.create_function(|lua, msg: String| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
@@ -353,6 +355,11 @@ impl LuaEnv {
         })?)?;
         loop_table.set("hrtime", self.lua.create_function(|_, _: ()| { Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64) })?)?;
         loop_table.set("cwd", self.lua.create_function(|_, _: ()| { Ok(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string()) })?)?;
+        loop_table.set("os_uname", self.lua.create_function(|lua, _: ()| {
+            let table = lua.create_table()?;
+            table.set("sysname", std::env::consts::OS)?; table.set("machine", std::env::consts::ARCH)?;
+            Ok(table)
+        })?)?;
         
         let _ = Self::add_missing_tracker(&self.lua, &loop_table, "vim.loop");
         vim.set("loop", &loop_table)?;
@@ -426,12 +433,14 @@ impl LuaEnv {
         let _ = cmd_table.set_metatable(Some(cmd_meta));
         vim.set("cmd", cmd_table)?;
 
+        // vim.version
         vim.set("version", self.lua.create_function(|lua, _: ()| {
             let t = lua.create_table()?;
             t.set("major", 0)?; t.set("minor", 9)?; t.set("patch", 0)?;
             Ok(t)
         })?)?;
 
+        // vim.v
         let v = self.lua.create_table()?;
         let v_meta = self.lua.create_table()?;
         v_meta.set("__index", self.lua.create_function(|lua, name: String| {
@@ -444,6 +453,7 @@ impl LuaEnv {
         let _ = v.set_metatable(Some(v_meta));
         vim.set("v", v)?;
 
+        // vim.g
         let g = self.lua.create_table()?;
         let g_meta = self.lua.create_table()?;
         g_meta.set("__index", self.lua.create_function(|lua, (_t, name): (Table, String)| {
@@ -465,6 +475,7 @@ impl LuaEnv {
         let _ = g.set_metatable(Some(g_meta));
         vim.set("g", g)?;
 
+        // vim.go
         let go = self.lua.create_table()?;
         let go_meta = self.lua.create_table()?;
         go_meta.set("__index", self.lua.create_function(|lua, (_t, name): (Table, String)| {
@@ -498,26 +509,37 @@ impl LuaEnv {
         let _ = go.set_metatable(Some(go_meta));
         vim.set("go", go)?;
 
-        let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
+        // EXPOSE VIM TO GLOBALS
         globals.set("vim", vim.clone())?;
 
-        // Lua helper functions for vim table - NOW CALLED AFTER globals.set("vim")
-        self.lua.load(r#"
-            vim.tbl_extend = function(behavior, ...)
-                local res = {}
-                local args = {...}
-                for i = 1, #args do
-                    local t = args[i]
-                    if t then
-                        for k, v in pairs(t) do
-                            res[k] = v
-                        end
-                    end
-                end
-                return res
-            end
-            vim.tbl_deep_extend = vim.tbl_extend
-        "#).exec()?;
+        // HELPER FUNCTIONS (implemented in Rust)
+        vim.set("tbl_extend", self.lua.create_function(|lua, (behavior, args): (String, MultiValue)| {
+            let res = lua.create_table()?;
+            for val in args {
+                if let Value::Table(t) = val {
+                    for pair in t.pairs::<Value, Value>() {
+                        let (k, v) = pair?;
+                        res.set(k, v)?;
+                    }
+                }
+            }
+            Ok(res)
+        })?)?;
+        vim.set("tbl_deep_extend", vim.get::<Value>("tbl_extend")?)?;
+        
+        vim.set("split", self.lua.create_function(|lua, (s, sep): (String, String)| {
+            let res = lua.create_table()?;
+            for (i, part) in s.split(&sep).enumerate() {
+                res.set(i + 1, part)?;
+            }
+            Ok(res)
+        })?)?;
+
+        vim.set("trim", self.lua.create_function(|_, s: String| { Ok(s.trim().to_string()) })?)?;
+        vim.set("inspect", self.lua.create_function(|_, v: Value| { Ok(format!("{:?}", v)) })?)?;
+
+        // Add missing API tracker last
+        let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
 
         Ok(())
     }
