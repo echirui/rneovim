@@ -438,6 +438,9 @@ impl LuaEnv {
             table.set("sysname", std::env::consts::OS)?; table.set("machine", std::env::consts::ARCH)?;
             Ok(table)
         })?)?;
+        loop_table.set("os_homedir", self.lua.create_function(|_, _: ()| {
+            Ok(dirs::home_dir().map(|p| p.to_string_lossy().to_string()))
+        })?)?;
         vim.set("loop", &loop_table)?;
         vim.set("uv", loop_table)?;
 
