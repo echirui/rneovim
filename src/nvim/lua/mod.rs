@@ -564,6 +564,17 @@ impl LuaEnv {
         // jit table
         let jit = self.lua.create_table()?;
         jit.set("version", "LuaJIT 2.1.0-beta3")?;
+        jit.set("os", match std::env::consts::OS {
+            "macos" => "OSX",
+            "windows" => "Windows",
+            "linux" => "Linux",
+            _ => std::env::consts::OS,
+        })?;
+        jit.set("arch", match std::env::consts::ARCH {
+            "x86_64" => "x64",
+            "aarch64" => "arm64",
+            _ => std::env::consts::ARCH,
+        })?;
         globals.set("jit", jit)?;
 
         // mock ffi
