@@ -5,15 +5,17 @@ use rneovim::nvim::request::Request;
 #[test]
 fn test_ex_buffer_management() {
     let mut state = VimState::new();
+    let id1 = state.buffers[0].borrow().id();
     
     // :enew
     execute_cmd(&mut state, "enew").unwrap();
     assert_eq!(state.buffers.len(), 2);
+    let id2 = state.buffers[1].borrow().id();
     
     // :ls
     execute_cmd(&mut state, "ls").unwrap();
-    assert!(state.cmdline().contains("1"));
-    assert!(state.cmdline().contains("2"));
+    assert!(state.cmdline().contains(&id1.to_string()));
+    assert!(state.cmdline().contains(&id2.to_string()));
 
     // :bn
     execute_cmd(&mut state, "bn").unwrap();

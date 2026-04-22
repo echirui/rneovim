@@ -131,6 +131,10 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             execute_cmd(state, &cmd)?;
         }
         Request::ExecuteCommandFromConfig(cmd) => {
+            if !cmd.is_empty() {
+                state.cmd_history.push(cmd.clone());
+                state.cmd_history_idx = None;
+            }
             execute_cmd(state, &cmd)?;
         }
         Request::ExecuteSearch => {

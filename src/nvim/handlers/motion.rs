@@ -194,7 +194,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                     Motion::WordForward | Motion::WordForwardBlank => {
                         let b = buf.borrow();
                         if let Some(line) = b.get_line(cur.row) {
-                            target = Cursor { row: cur.row, col: line.chars().count().saturating_sub(1) };
+                            target = Cursor { row: cur.row, col: line.chars().count() };
                         }
                     }
                     _ => {}

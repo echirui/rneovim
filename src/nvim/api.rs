@@ -1,4 +1,4 @@
-use crate::nvim::state::{VimState, AutoCmdEvent};
+use crate::nvim::state::{VimState, AutoCmdEvent, TabPage};
 use crate::nvim::request::Request;
 use crate::nvim::error::Result;
 use crate::nvim::os::fs;
@@ -35,6 +35,17 @@ pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
             _ => { if let Some((_, ref mut recorded_reqs)) = state.macro_recording { recorded_reqs.push(req.clone()); } }
         }
     }
+    
+    // RepeatLastChange is handled before other handlers to avoid recording IT as the last change
+    if let Request::RepeatLastChange { count } = &req {
+        if let Some(last) = state.last_change.clone() {
+            for _ in 0..*count {
+                handle_request(state, last.clone())?;
+            }
+        }
+        return Ok(());
+    }
+
     handlers::state::handle(state, req.clone())?;
     handlers::edit::handle(state, req.clone())?;
     handlers::motion::handle(state, req.clone())?;
@@ -93,11 +104,16 @@ pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
 }
 
 pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
+    let cmd = cmd.trim();
     if cmd.is_empty() { return Ok(()); }
+    
+    // Strip leading colon if present
+    let cmd = if cmd.starts_with(':') { &cmd[1..].trim() } else { cmd };
+    if cmd.is_empty() { return Ok(()); }
+
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() { return Ok(()); }
 
-    // まずユーザーコマンドをチェック
     let cmd_name = parts[0];
     if state.user_commands.contains_key(cmd_name) {
         let env = state.lua_env.clone();
@@ -114,6 +130,19 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
                 handle_request(state, Request::OpenFile(abs_path.to_string_lossy().to_string()))?;
             }
         }
+        "enew" => {
+            let buf = std::rc::Rc::new(std::cell::RefCell::new(crate::nvim::buffer::Buffer::new()));
+            state.buffers.push(buf.clone());
+            state.current_window_mut().buffer = buf;
+            state.current_window_mut().set_cursor(1, 0);
+        }
+        "saveas" => {
+            if parts.len() > 1 {
+                let path = parts[1];
+                state.current_window().buffer().borrow_mut().set_name(path);
+                let _ = execute_cmd(state, "w");
+            }
+        }
         "w" | "write" => {
             let buf_rc = state.current_window().buffer();
             let b = buf_rc.borrow();
@@ -122,6 +151,129 @@ pub fn execute_cmd(state: &mut VimState, cmd: &str) -> Result<()> {
             }
         }
         "q" | "quit" => state.quit(),
+        "ls" | "buffers" => {
+            let mut info = Vec::new();
+            for b in &state.buffers {
+                let b = b.borrow();
+                info.push(format!("{} {}", b.id(), b.name().unwrap_or("[No Name]")));
+            }
+            state.set_cmdline(info.join("\n"));
+        }
+        "bn" | "bnext" => {
+            let cur_buf_id = state.current_window().buffer().borrow().id();
+            if let Some(pos) = state.buffers.iter().position(|b| b.borrow().id() == cur_buf_id) {
+                let next_idx = (pos + 1) % state.buffers.len();
+                state.current_window_mut().buffer = state.buffers[next_idx].clone();
+            }
+        }
+        "bp" | "bprev" => {
+            let cur_buf_id = state.current_window().buffer().borrow().id();
+            if let Some(pos) = state.buffers.iter().position(|b| b.borrow().id() == cur_buf_id) {
+                let prev_idx = (pos + state.buffers.len() - 1) % state.buffers.len();
+                state.current_window_mut().buffer = state.buffers[prev_idx].clone();
+            }
+        }
+        "bd" | "bdelete" => {
+            let cur_buf_id = state.current_window().buffer().borrow().id();
+            if state.buffers.len() > 1 {
+                if let Some(pos) = state.buffers.iter().position(|b| b.borrow().id() == cur_buf_id) {
+                    state.buffers.remove(pos);
+                    let next_idx = pos % state.buffers.len();
+                    state.current_window_mut().buffer = state.buffers[next_idx].clone();
+                }
+            }
+        }
+        "echo" => {
+            if parts.len() > 1 { state.set_cmdline(parts[1..].join(" ")); }
+        }
+        "echomsg" => {
+            if parts.len() > 1 {
+                let msg = parts[1..].join(" ");
+                state.messages.push(msg);
+            }
+        }
+        "messages" => {
+            state.set_cmdline(state.messages.join("\n"));
+        }
+        "pwd" => {
+            if let Ok(cwd) = std::env::current_dir() {
+                state.set_cmdline(cwd.display().to_string());
+            }
+        }
+        "tabnew" => {
+            let buf = if state.buffers.is_empty() {
+                let b = std::rc::Rc::new(std::cell::RefCell::new(crate::nvim::buffer::Buffer::new()));
+                state.buffers.push(b.clone());
+                b
+            } else {
+                state.buffers[0].clone()
+            };
+            let win = crate::nvim::window::Window::new(buf);
+            state.tabpages.push(TabPage::new(win));
+            state.current_tab_idx = state.tabpages.len() - 1;
+        }
+        "tabn" | "tabnext" => {
+            state.current_tab_idx = (state.current_tab_idx + 1) % state.tabpages.len();
+        }
+        "tabp" | "tabprev" => {
+            state.current_tab_idx = (state.current_tab_idx + state.tabpages.len() - 1) % state.tabpages.len();
+        }
+        "tabclose" => {
+            if state.tabpages.len() > 1 {
+                state.tabpages.remove(state.current_tab_idx);
+                state.current_tab_idx %= state.tabpages.len();
+            }
+        }
+        "marks" => {
+            let b = state.current_window().buffer();
+            let b = b.borrow();
+            let mut res = vec!["mark line  col file/text".to_string()];
+            for (c, pos) in b.marks.iter() {
+                res.push(format!(" {}    {}    {} {}", c, pos.row, pos.col, b.get_line(pos.row).unwrap_or("")));
+            }
+            state.set_cmdline(res.join("\n"));
+        }
+        "jumps" => {
+            state.set_cmdline("jump line  col file/text\n > 0    1    0 [No Name]".to_string());
+        }
+        "undo" => {
+            let b = state.current_window().buffer();
+            let mut b = b.borrow_mut();
+            if let Ok(Some(pos)) = b.undo() {
+                state.current_window_mut().set_cursor(pos.row, pos.col);
+            }
+        }
+        "redo" => {
+            let b = state.current_window().buffer();
+            let mut b = b.borrow_mut();
+            if let Ok(Some(pos)) = b.redo() {
+                state.current_window_mut().set_cursor(pos.row, pos.col);
+            }
+        }
+        "join" => {
+            let win = state.current_window();
+            let row = win.cursor().row;
+            let buf = win.buffer();
+            let mut b = buf.borrow_mut();
+            if let (Some(l1), Some(l2)) = (b.get_line(row), b.get_line(row + 1)) {
+                let joined = format!("{} {}", l1, l2.trim_start());
+                b.start_undo_group();
+                let _ = b.delete_line(row + 1);
+                let _ = b.set_line(row, 0, &joined);
+                b.end_undo_group();
+            }
+        }
+        "ascii" => {
+            let win = state.current_window();
+            let cur = win.cursor();
+            let b = win.buffer();
+            let b = b.borrow();
+            if let Some(line) = b.get_line(cur.row) {
+                if let Some(c) = line.chars().nth(cur.col) {
+                    state.set_cmdline(format!("<{}>  {},  Hex {:02x},  Octal {:03o}", c, c as u32, c as u32, c as u32));
+                }
+            }
+        }
         "set" => {
             if parts.len() > 1 {
                 let opt = parts[1];

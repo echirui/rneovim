@@ -71,6 +71,11 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         Request::SetRegister { reg, text } => {
             crate::nvim::handlers::set_register_text(state, reg, text);
         }
+        Request::SetMark(c) => {
+            let win = state.current_window();
+            let cur = win.cursor();
+            win.buffer().borrow_mut().set_mark(c, cur);
+        }
         _ => {}
     }
     Ok(())
