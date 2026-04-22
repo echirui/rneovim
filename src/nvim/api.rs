@@ -2,7 +2,6 @@ use crate::nvim::state::{VimState, AutoCmdEvent};
 use crate::nvim::request::Request;
 use crate::nvim::error::Result;
 use crate::nvim::os::fs;
-use std::rc::Rc;
 
 use crate::nvim::handlers;
 

@@ -8,8 +8,7 @@ use crate::nvim::window::{Window, Cursor};
 use crate::nvim::ui::grid::{Grid, Color};
 use crate::nvim::eval::EvalContext;
 use crate::nvim::lua::LuaEnv;
-use crate::nvim::request::{Request, Operator, Motion, TextObject};
-use crate::nvim::error::Result;
+use crate::nvim::request::{Request, Operator};
 use crate::nvim::event::event_loop::EventCallback;
 use crate::nvim::syntax::SyntaxHighlighter;
 
@@ -222,6 +221,8 @@ impl VimState {
     }
 
     pub fn redraw(&mut self) {
+        // 全画面消去とカーソルホーム
+        print!("\x1B[2J\x1B[H");
         self.grid.clear();
         
         // 1. 通常ウィンドウの描画
@@ -268,7 +269,9 @@ impl VimState {
             self.grid.put_str(cmd_row, 0, prefix, Color::White, Color::Default, false);
             self.grid.put_str(cmd_row, 1, &self.cmdline, Color::White, Color::Default, false);
         } else if !self.messages.is_empty() {
-            self.grid.put_str(cmd_row, 0, self.messages.last().unwrap(), Color::White, Color::Default, false);
+            let msg = self.messages.last().unwrap();
+            // 長いメッセージがステータスバーを壊さないように、cmd_row に描画
+            self.grid.put_str(cmd_row, 0, msg, Color::White, Color::Default, false);
         }
         self.grid.flush();
     }

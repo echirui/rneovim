@@ -47,7 +47,7 @@ impl LuaEnv {
         Ok(())
     }
 
-    pub fn register_api(&self, buffers: Vec<Rc<RefCell<Buffer>>>, sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
+    pub fn register_api(&self, _buffers: Vec<Rc<RefCell<Buffer>>>, sender: Option<Sender<EventCallback<VimState>>>) -> Result<()> {
         let globals = self.lua.globals();
         let vim = self.lua.create_table()?;
         let api = self.lua.create_table()?;
@@ -223,7 +223,6 @@ impl LuaEnv {
             if let Some(wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &*wrapper.0 };
                 if let Some(buf_rc) = state.buffers.iter().find(|b| b.borrow().id() == buf_id) {
-                    let _b = buf_rc.borrow();
                     match name.as_str() {
                         "filetype" => return Ok(mlua::Value::String(lua.create_string("text")?)),
                         "buftype" => return Ok(mlua::Value::String(lua.create_string("")?)),

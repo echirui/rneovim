@@ -30,7 +30,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                         Cursor { row: target.row, col: (target.col + 1).min(chars_count.saturating_sub(1)) }
                     },
                     Motion::Up => {
-                        let mut next_row = target.row.saturating_sub(1).max(1);
+                        let next_row = target.row.saturating_sub(1).max(1);
                         state.current_window_mut().set_cursor_vertical(next_row);
                         state.current_window().cursor()
                     },
