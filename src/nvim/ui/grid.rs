@@ -100,6 +100,13 @@ impl Grid {
         self.old_cells = vec![Cell::default(); size];
     }
 
+    pub fn force_redraw(&mut self) {
+        for cell in self.old_cells.iter_mut() {
+            cell.char = '\0';
+        }
+        self.flush();
+    }
+
     pub fn put_char(&mut self, row: usize, col: usize, c: char, fg: Color, bg: Color, bold: bool) {
         if row < self.height && col < self.width {
             let width = c.width().unwrap_or(1);
@@ -207,13 +214,6 @@ impl Grid {
         // リセット
         write!(out, "\x1B[0m").unwrap();
         let _ = out.flush();
-    }
-
-    pub fn force_redraw(&mut self) {
-        for cell in self.old_cells.iter_mut() {
-            cell.char = '\0';
-        }
-        self.flush();
     }
 }
 

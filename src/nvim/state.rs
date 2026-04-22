@@ -221,8 +221,7 @@ impl VimState {
     }
 
     pub fn redraw(&mut self) {
-        // 全画面消去とカーソルホーム
-        print!("\x1B[2J\x1B[H");
+        self.grid.force_redraw();
         self.grid.clear();
         
         // 1. 通常ウィンドウの描画
