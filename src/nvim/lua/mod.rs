@@ -400,14 +400,47 @@ impl LuaEnv {
                 _ => data_dir.to_string_lossy().to_string(),
             })
         })?)?;
+        fn_table.set("expand", self.lua.create_function(|_, path: String| {
+            let mut res = path.clone();
+            if path.starts_with('~') {
+                if let Some(home) = dirs::home_dir() {
+                    res = path.replace('~', &home.to_string_lossy());
+                }
+            }
+            // 環境変数の展開 (簡易版)
+            if path.contains('$') {
+                for (k, v) in std::env::vars() {
+                    let key = format!("${}", k);
+                    if res.contains(&key) {
+                        res = res.replace(&key, &v);
+                    }
+                }
+            }
+            Ok(res)
+        })?)?;
         fn_table.set("fnamemodify", self.lua.create_function(|_, (path_opt, modifier): (Option<String>, String)| {
             let path = path_opt.unwrap_or_default();
             let mut res = std::path::PathBuf::from(&path);
-            if modifier.contains(":p") {
-                if path.starts_with('~') { if let Some(home) = dirs::home_dir() { res = home.join(&path[2..]); } }
+            
+            // 修飾子を個別に処理する (:p, :h, :t 等)
+            let mods: Vec<&str> = modifier.split(':').filter(|s| !s.is_empty()).collect();
+            for m in mods {
+                if m == "p" {
+                    if path.starts_with('~') { if let Some(home) = dirs::home_dir() { res = home.join(&path[2..]); } }
+                    res = std::fs::canonicalize(&res).unwrap_or(res);
+                } else if m == "h" {
+                    if let Some(parent) = res.parent() { res = parent.to_path_buf(); }
+                } else if m == "t" {
+                    if let Some(tail) = res.file_name() { res = std::path::PathBuf::from(tail); }
+                } else if m == "e" {
+                    if let Some(ext) = res.extension() { res = std::path::PathBuf::from(ext); }
+                } else if m == "r" {
+                    if let Some(stem) = res.file_stem() { 
+                        if let Some(parent) = res.parent() { res = parent.join(stem); }
+                        else { res = std::path::PathBuf::from(stem); }
+                    }
+                }
             }
-            if modifier.contains(":h") { if let Some(parent) = res.parent() { res = parent.to_path_buf(); } }
-            if modifier.contains(":t") { if let Some(tail) = res.file_name() { res = std::path::PathBuf::from(tail); } }
             Ok(res.to_string_lossy().to_string())
         })?)?;
         fn_table.set("has", self.lua.create_function(|lua, name: String| {
@@ -453,6 +486,14 @@ impl LuaEnv {
             if let Ok(meta) = std::fs::metadata(&path) {
                 let table = lua.create_table()?;
                 table.set("type", if meta.is_dir() { "directory" } else { "file" })?;
+                table.set("size", meta.len())?;
+                if let Ok(mtime) = meta.modified() {
+                    let duration = mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    let mtime_table = lua.create_table()?;
+                    mtime_table.set("sec", duration.as_secs())?;
+                    mtime_table.set("nsec", duration.subsec_nanos())?;
+                    table.set("mtime", mtime_table)?;
+                }
                 Ok(Value::Table(table))
             } else { Ok(Value::Nil) }
         })?)?;
@@ -471,11 +512,14 @@ impl LuaEnv {
                     "w+" => { opts.read(true).write(true).create(true).truncate(true); }
                     _ => { opts.read(true); }
                 }
-                if let Ok(file) = opts.open(path) {
+                if let Ok(file) = opts.open(&path) {
                     let fd = state.next_fd;
+                    state.log(&format!("FS_OPEN: path={}, fd={}", path, fd));
                     state.open_files.insert(fd, file);
                     state.next_fd += 1;
                     return Ok(Value::Integer(fd as i64));
+                } else {
+                    state.log(&format!("FS_OPEN FAILED: path={}", path));
                 }
             }
             Ok(Value::Nil)
@@ -483,6 +527,7 @@ impl LuaEnv {
         loop_table.set("fs_close", self.lua.create_function(|lua, fd: i32| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
+                state.log(&format!("FS_CLOSE: fd={}", fd));
                 state.open_files.remove(&fd);
             }
             Ok(true)
@@ -495,11 +540,25 @@ impl LuaEnv {
                         let table = lua.create_table()?;
                         table.set("type", if meta.is_dir() { "directory" } else { "file" })?;
                         table.set("size", meta.len())?;
+                        if let Ok(mtime) = meta.modified() {
+                            let duration = mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                            let mtime_table = lua.create_table()?;
+                            mtime_table.set("sec", duration.as_secs())?;
+                            mtime_table.set("nsec", duration.subsec_nanos())?;
+                            table.set("mtime", mtime_table)?;
+                        }
                         return Ok(Value::Table(table));
                     }
                 }
             }
             Ok(Value::Nil)
+        })?)?;
+        loop_table.set("fs_access", self.lua.create_function(|_, (path, _mode): (String, Value)| {
+            Ok(std::path::Path::new(&path).exists())
+        })?)?;
+        loop_table.set("fs_utime", self.lua.create_function(|_, (path, _atime, _mtime): (String, f64, f64)| {
+            // 現在はスタブ
+            Ok(true)
         })?)?;
         loop_table.set("fs_read", self.lua.create_function(|lua, (fd, size, offset): (i32, usize, i64)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
@@ -807,6 +866,94 @@ impl LuaEnv {
             Ok(current)
         })?)?;
 
+        vim.set("tbl_contains", self.lua.create_function(|_, (t, value): (Table, Value)| {
+            for pair in t.pairs::<Value, Value>() {
+                let (_, v) = pair?;
+                if v == value { return Ok(true); }
+            }
+            Ok(false)
+        })?)?;
+
+        vim.set("tbl_keys", self.lua.create_function(|lua, t: Table| {
+            let keys = lua.create_table()?;
+            for (i, pair) in t.pairs::<Value, Value>().enumerate() {
+                let (k, _) = pair?;
+                keys.set(i + 1, k)?;
+            }
+            Ok(keys)
+        })?)?;
+
+        vim.set("tbl_values", self.lua.create_function(|lua, t: Table| {
+            let values = lua.create_table()?;
+            for (i, pair) in t.pairs::<Value, Value>().enumerate() {
+                let (_, v) = pair?;
+                values.set(i + 1, v)?;
+            }
+            Ok(values)
+        })?)?;
+
+        vim.set("list_extend", self.lua.create_function(|_, (dst, src, start, end): (Table, Table, Option<usize>, Option<usize>)| {
+            let start = start.unwrap_or(1);
+            let len = src.len()? as usize;
+            let end = end.unwrap_or(len);
+            let mut dst_idx = dst.len()? + 1;
+            for i in start..=end {
+                dst.set(dst_idx, src.get::<Value>(i)?)?;
+                dst_idx += 1;
+            }
+            Ok(dst)
+        })?)?;
+
+        vim.set("is_list", self.lua.create_function(|_, v: Value| {
+            if let Value::Table(t) = v {
+                let len = t.len()?;
+                if len == 0 {
+                    // 空テーブルは通常リストとして扱われる（または曖昧）
+                    return Ok(true);
+                }
+                // 簡易的にインデックス 1 が存在するかで判定
+                return Ok(t.get::<Value>(1)? != Value::Nil);
+            }
+            Ok(false)
+        })?)?;
+
+        vim.set("list_slice", self.lua.create_function(|lua, (t, start, end): (Table, Option<usize>, Option<usize>)| {
+            let start = start.unwrap_or(1);
+            let len = t.len()? as usize;
+            let end = end.unwrap_or(len);
+            let res = lua.create_table()?;
+            for i in start..=end {
+                res.set(i - start + 1, t.get::<Value>(i)?)?;
+            }
+            Ok(res)
+        })?)?;
+
+        vim.set("tbl_map", self.lua.create_function(|lua, (f, t): (mlua::Function, Table)| {
+            let res = lua.create_table()?;
+            for pair in t.pairs::<Value, Value>() {
+                let (k, v) = pair?;
+                res.set(k.clone(), f.call::<Value>(v)?)?;
+            }
+            Ok(res)
+        })?)?;
+
+        vim.set("tbl_filter", self.lua.create_function(|lua, (f, t): (mlua::Function, Table)| {
+            let res = lua.create_table()?;
+            let mut idx = 1;
+            for pair in t.pairs::<Value, Value>() {
+                let (k, v) = pair?;
+                if f.call::<bool>(v.clone())? {
+                    if let Value::Integer(_) = k {
+                        res.set(idx, v)?;
+                        idx += 1;
+                    } else {
+                        res.set(k, v)?;
+                    }
+                }
+            }
+            Ok(res)
+        })?)?;
+
         vim.set("split", self.lua.create_function(|lua, (s, sep): (String, String)| {
             let res = lua.create_table()?;
             for (i, part) in s.split(&sep).enumerate() { res.set(i + 1, part)?; }
@@ -879,16 +1026,16 @@ impl LuaEnv {
             Ok(())
         })?)?;
 
-        // EXPOSE VIM TO GLOBALS
-        globals.set("vim", vim.clone())?;
-
-        // vim.loader
-        let loader = self.lua.create_table()?;
-        loader.set("enable", self.lua.create_function(|_, _: ()| Ok(()))?)?;
-        vim.set("loader", loader)?;
+        // vim.loader (disabled to investigate leak)
+        // let loader = self.lua.create_table()?;
+        // loader.set("enable", self.lua.create_function(|_, _: ()| Ok(()))?)?;
+        // vim.set("loader", loader)?;
 
         // vim._load_package
         vim.set("_load_package", self.lua.create_function(|_, _: String| Ok(()))?)?;
+
+        // EXPOSE VIM TO GLOBALS
+        globals.set("vim", vim.clone())?;
 
         // Add missing API tracker last to vim itself
         let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
