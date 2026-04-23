@@ -480,6 +480,9 @@ impl LuaEnv {
             }
             Ok(None)
         })?)?;
+        loop_table.set("fs_scandir_next", self.lua.create_function(|_, handle: mlua::Function| {
+            handle.call::<MultiValue>(())
+        })?)?;
         loop_table.set("hrtime", self.lua.create_function(|_, _: ()| { Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64) })?)?;
         loop_table.set("cwd", self.lua.create_function(|_, _: ()| { Ok(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string()) })?)?;
         loop_table.set("os_uname", self.lua.create_function(|lua, _: ()| {
