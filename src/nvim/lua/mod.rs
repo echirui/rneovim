@@ -487,6 +487,20 @@ impl LuaEnv {
             }
             Ok(true)
         })?)?;
+        loop_table.set("fs_fstat", self.lua.create_function(|lua, fd: i32| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                if let Some(file) = state.open_files.get(&fd) {
+                    if let Ok(meta) = file.metadata() {
+                        let table = lua.create_table()?;
+                        table.set("type", if meta.is_dir() { "directory" } else { "file" })?;
+                        table.set("size", meta.len())?;
+                        return Ok(Value::Table(table));
+                    }
+                }
+            }
+            Ok(Value::Nil)
+        })?)?;
         loop_table.set("fs_read", self.lua.create_function(|lua, (fd, size, offset): (i32, usize, i64)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
