@@ -390,11 +390,14 @@ impl LuaEnv {
         // vim.fn
         let fn_table = self.lua.create_table()?;
         fn_table.set("stdpath", self.lua.create_function(|_, name: String| {
+            let data_dir = Self::get_data_dir();
             Ok(match name.as_str() {
                 "config" => Self::get_config_dir().to_string_lossy().to_string(),
-                "data" => Self::get_data_dir().to_string_lossy().to_string(),
-                "cache" => dirs::cache_dir().unwrap_or_default().join("rneovim").to_string_lossy().to_string(),
-                _ => "".to_string(),
+                "data" => data_dir.to_string_lossy().to_string(),
+                "cache" => dirs::cache_dir().unwrap_or_else(|| data_dir.join("cache")).join("rneovim").to_string_lossy().to_string(),
+                "state" => dirs::state_dir().unwrap_or_else(|| data_dir.join("state")).join("rneovim").to_string_lossy().to_string(),
+                "run" => std::env::var("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| data_dir.join("run")).join("rneovim").to_string_lossy().to_string(),
+                _ => data_dir.to_string_lossy().to_string(),
             })
         })?)?;
         fn_table.set("fnamemodify", self.lua.create_function(|_, (path_opt, modifier): (Option<String>, String)| {
@@ -403,6 +406,8 @@ impl LuaEnv {
             if modifier.contains(":p") {
                 if path.starts_with('~') { if let Some(home) = dirs::home_dir() { res = home.join(&path[2..]); } }
             }
+            if modifier.contains(":h") { if let Some(parent) = res.parent() { res = parent.to_path_buf(); } }
+            if modifier.contains(":t") { if let Some(tail) = res.file_name() { res = std::path::PathBuf::from(tail); } }
             Ok(res.to_string_lossy().to_string())
         })?)?;
         fn_table.set("has", self.lua.create_function(|lua, name: String| {
@@ -454,6 +459,64 @@ impl LuaEnv {
         loop_table.set("fs_mkdir", self.lua.create_function(|_, (path, _mode): (String, i32)| {
             let _ = std::fs::create_dir_all(path);
             Ok(true)
+        })?)?;
+        loop_table.set("fs_open", self.lua.create_function(|lua, (path, flags, _mode): (String, String, i32)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                let mut opts = std::fs::OpenOptions::new();
+                match flags.as_str() {
+                    "r" => { opts.read(true); }
+                    "w" => { opts.write(true).create(true).truncate(true); }
+                    "a" => { opts.append(true).create(true); }
+                    "w+" => { opts.read(true).write(true).create(true).truncate(true); }
+                    _ => { opts.read(true); }
+                }
+                if let Ok(file) = opts.open(path) {
+                    let fd = state.next_fd;
+                    state.open_files.insert(fd, file);
+                    state.next_fd += 1;
+                    return Ok(Value::Integer(fd as i64));
+                }
+            }
+            Ok(Value::Nil)
+        })?)?;
+        loop_table.set("fs_close", self.lua.create_function(|lua, fd: i32| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                state.open_files.remove(&fd);
+            }
+            Ok(true)
+        })?)?;
+        loop_table.set("fs_read", self.lua.create_function(|lua, (fd, size, offset): (i32, usize, i64)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                if let Some(mut file) = state.open_files.get(&fd) {
+                    use std::io::{Read, Seek, SeekFrom};
+                    let mut buf = vec![0u8; size];
+                    if offset >= 0 { let _ = file.seek(SeekFrom::Start(offset as u64)); }
+                    if let Ok(n) = file.read(&mut buf) {
+                        return Ok(Some(lua.create_string(&buf[..n])?));
+                    }
+                }
+            }
+            Ok(None)
+        })?)?;
+        loop_table.set("fs_write", self.lua.create_function(|lua, (fd, data, offset): (i32, Value, i64)| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                if let Some(mut file) = state.open_files.get(&fd) {
+                    use std::io::{Write, Seek, SeekFrom};
+                    let bytes = match data {
+                        Value::String(s) => s.as_bytes().to_vec(),
+                        _ => return Ok(Value::Integer(0)),
+                    };
+                    if offset >= 0 { let _ = file.seek(SeekFrom::Start(offset as u64)); }
+                    if let Ok(_) = file.write_all(&bytes) {
+                        return Ok(Value::Integer(bytes.len() as i64));
+                    }
+                }
+            }
+            Ok(Value::Integer(0))
         })?)?;
         loop_table.set("fs_realpath", self.lua.create_function(|_, path: String| {
             Ok(std::fs::canonicalize(&path).map(|p| p.to_string_lossy().to_string()).ok())
@@ -758,6 +821,15 @@ impl LuaEnv {
         vim.set("in_fast_event", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
         vim.set("is_thread", self.lua.create_function(|_, _: ()| { Ok(false) })?)?;
 
+        // vim.health
+        let health = self.lua.create_table()?;
+        health.set("start", self.lua.create_function(|_, _name: String| { Ok(()) })?)?;
+        health.set("info", self.lua.create_function(|_, _msg: String| { Ok(()) })?)?;
+        health.set("ok", self.lua.create_function(|_, _msg: String| { Ok(()) })?)?;
+        health.set("warn", self.lua.create_function(|_, _msg: String| { Ok(()) })?)?;
+        health.set("error", self.lua.create_function(|_, _msg: String| { Ok(()) })?)?;
+        vim.set("health", health)?;
+
         // jit table
         let jit = self.lua.create_table()?;
         jit.set("version", "LuaJIT 2.1.0-beta3")?;
@@ -779,8 +851,33 @@ impl LuaEnv {
             Ok(ffi)
         })?)?;
 
+        // vim.schedule
+        vim.set("schedule", self.lua.create_function(|lua, f: mlua::Function| {
+            if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
+                let state = unsafe { &mut *wrapper.0 };
+                if let Some(sender) = &state.sender {
+                    let key = lua.create_registry_value(f)?;
+                    let _ = sender.send(Box::new(move |state| {
+                        let _ = state.lua_env.borrow().execute_callback(&key);
+                    }));
+                }
+            }
+            Ok(())
+        })?)?;
+
         // EXPOSE VIM TO GLOBALS
         globals.set("vim", vim.clone())?;
+
+        // vim.loader
+        let loader = self.lua.create_table()?;
+        loader.set("enable", self.lua.create_function(|_, _: ()| Ok(()))?)?;
+        vim.set("loader", loader)?;
+
+        // vim._load_package
+        vim.set("_load_package", self.lua.create_function(|_, _: String| Ok(()))?)?;
+
+        // Add missing API tracker last to vim itself
+        let _ = Self::add_missing_tracker(&self.lua, &vim, "vim");
 
         Ok(())
     }

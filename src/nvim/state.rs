@@ -89,6 +89,8 @@ pub struct VimState {
     pub vim_did_enter: bool,
     pub lua_env: Rc<RefCell<LuaEnv>>,
     pub eval_context: EvalContext,
+    pub open_files: HashMap<i32, std::fs::File>,
+    pub next_fd: i32,
 }
 
 #[derive(Clone)]
@@ -224,6 +226,8 @@ impl VimState {
             vim_did_enter: false,
             lua_env: Rc::new(RefCell::new(LuaEnv::new())),
             eval_context: EvalContext::new(),
+            open_files: HashMap::new(),
+            next_fd: 10, // 0,1,2などは避ける
         }
     }
 
@@ -372,7 +376,7 @@ impl VimState {
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("rneovim.log") 
+            .open("/Users/echirui/work/rneovim/rneovim.log") 
         {
             let _ = writeln!(file, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), msg);
         }

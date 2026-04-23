@@ -5,8 +5,6 @@ use rneovim::nvim::event::key_processor::KeyProcessor;
 use rneovim::nvim::api::handle_request;
 use rneovim::nvim::request::{Request, MouseButton, MouseAction};
 
-use std::sync::mpsc;
-
 extern "C" {
     fn os_setup_terminal();
     fn os_restore_terminal();
@@ -17,6 +15,7 @@ extern "C" {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut state = VimState::new();
+    state.log("=== RNEOVIM STARTUP ===");
     let mut eloop = EventLoop::new();
     let processor = KeyProcessor::new();
 
@@ -47,6 +46,20 @@ fn main() {
         }
         i += 1;
     }
+
+    let sender = eloop.sender();
+    state.sender = Some(sender.clone());
+
+    // プラグインとAPIの初期化
+    let bufs = state.buffers.clone();
+    let s = state.sender.clone();
+    if let Err(e) = state.lua_env.borrow_mut().register_api(bufs, s) {
+        state.log(&format!("Failed to register API: {}", e));
+    }
+
+    state.init_plugins();
+    state.vim_did_enter = true;
+    rneovim::nvim::api::trigger_autocmd(&mut state, rneovim::nvim::state::AutoCmdEvent::VimEnter);
 
     if let Some(keys) = test_keys {
         if let Some(f) = filename {
@@ -87,29 +100,17 @@ fn main() {
         return;
     }
 
-    let (sender, _receiver) = mpsc::channel();
-    state.sender = Some(sender.clone());
-
     unsafe { os_setup_terminal() };
     
     // ターミナルサイズの取得と反映
     if let Some((terminal_size::Width(w), terminal_size::Height(h))) = terminal_size::terminal_size() {
         state.grid.resize(w as usize, h as usize);
-        state.current_window_mut().set_height(h as usize - 2);
+        let win = state.current_window_mut();
+        win.set_width(w as usize);
+        win.set_height((h as usize).saturating_sub(2));
     }
 
     print!("\x1B[2J\x1B[H\x1B[?25l\x1B[?1000h\x1B[?1006h");
-    state.redraw();
-
-    let bufs = state.buffers.clone();
-    let s = state.sender.clone();
-    if let Err(e) = state.lua_env.borrow_mut().register_api(bufs, s) {
-        state.log(&format!("Failed to register API: {}", e));
-    }
-
-    state.init_plugins();
-    state.vim_did_enter = true;
-    rneovim::nvim::api::trigger_autocmd(&mut state, rneovim::nvim::state::AutoCmdEvent::VimEnter);
     state.redraw();
 
     let sender_clone = sender.clone();
@@ -146,21 +147,16 @@ fn main() {
         }
     });
 
-    let mut term_w: std::ffi::c_int = 0; let mut term_h: std::ffi::c_int = 0;
-    unsafe { os_get_terminal_size(&mut term_w, &mut term_h) };
-    if term_w > 0 && term_h > 0 {
-        state.grid.resize(term_w as usize, term_h as usize);
-        let win = state.current_window_mut();
-        win.set_width(term_w as usize);
-        win.set_height((term_h as usize).saturating_sub(2));
-    }
     let _ = rneovim::load_config(&mut state, ".rneovimrc");
-    if args.len() > 1 {
-        let _ = handle_request(&mut state, Request::OpenFile(args[1].clone()));
+    if filename.is_some() {
+        let _ = handle_request(&mut state, Request::OpenFile(filename.unwrap()));
     }
     let _ = handle_request(&mut state, Request::Redraw);
 
     while !state.should_quit() {
+        // 非同期リクエストの処理
+        eloop.poll_events(&mut state, Some(Duration::ZERO));
+
         let c = unsafe { os_read_char() };
         if c != -1 {
             let key = c as u8 as char;
@@ -196,44 +192,10 @@ fn main() {
                     } else {
                         // Arrow keys and others
                         special_req = match buf.as_str() {
-                            "A" => { // Up
-                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
-                                    Some(Request::CmdLineHistory { forward: false })
-                                } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Up, count: 1 })
-                                }
-                            }
-                            "B" => { // Down
-                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
-                                    Some(Request::CmdLineHistory { forward: true })
-                                } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Down, count: 1 })
-                                }
-                            }
-                            "C" => { // Right
-                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
-                                    Some(Request::CmdLineMoveCursor { offset: 1 })
-                                } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Right, count: 1 })
-                                }
-                            }
-                            "D" => { // Left
-                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
-                                    Some(Request::CmdLineMoveCursor { offset: -1 })
-                                } else {
-                                    Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Left, count: 1 })
-                                }
-                            }
-                            "H" | "1~" => { // Home
-                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
-                                    Some(Request::CmdLineMoveCursorTo { pos: 0 })
-                                } else { None }
-                            }
-                            "F" | "4~" => { // End
-                                if state.mode() == Mode::CommandLine || state.mode() == Mode::Search {
-                                    Some(Request::CmdLineMoveCursorTo { pos: 9999 })
-                                } else { None }
-                            }
+                            "A" => Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Up, count: 1 }),
+                            "B" => Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Down, count: 1 }),
+                            "C" => Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Right, count: 1 }),
+                            "D" => Some(Request::OpMotion { op: rneovim::nvim::request::Operator::None, motion: rneovim::nvim::request::Motion::Left, count: 1 }),
                             _ => None,
                         };
                     }
@@ -241,23 +203,15 @@ fn main() {
             }
 
             let req = if let Some(sr) = special_req {
-                Some(sr)
+                sr
             } else {
-                processor.process_key(&mut state, key)
+                processor.process_key(&mut state, key).unwrap_or(Request::Redraw)
             };
-
-            if let Some(r) = req {
-                let _ = handle_request(&mut state, r);
-                state.pending_register = None;
-            }
-            let _ = handle_request(&mut state, Request::Redraw);
+            let _ = handle_request(&mut state, req);
+            state.redraw();
         }
-        eloop.poll_events(&mut state, Some(Duration::from_millis(10)));
+        std::thread::sleep(Duration::from_millis(10));
     }
-    unsafe { 
-        print!("\x1B[?1006l\x1B[?1000l");
-        os_restore_terminal() 
-    };
-    print!("\x1B[?25h\x1B[2J\x1B[H");
-    println!("Exited rneovim.");
+
+    unsafe { os_restore_terminal() };
 }
