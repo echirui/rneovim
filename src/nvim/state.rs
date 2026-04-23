@@ -123,6 +123,8 @@ pub enum AutoCmdEvent {
     Syntax,
     InsertEnter,
     InsertLeave,
+    User,
+    ColorSchemePre,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
