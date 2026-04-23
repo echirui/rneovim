@@ -458,6 +458,28 @@ impl LuaEnv {
         loop_table.set("fs_realpath", self.lua.create_function(|_, path: String| {
             Ok(std::fs::canonicalize(&path).map(|p| p.to_string_lossy().to_string()).ok())
         })?)?;
+        loop_table.set("fs_scandir", self.lua.create_function(|lua, path: String| {
+            if let Ok(entries) = std::fs::read_dir(&path) {
+                let items: Vec<(String, String)> = entries.filter_map(|e| e.ok()).map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let file_type = if e.path().is_dir() { "directory".to_string() } else { "file".to_string() };
+                    (name, file_type)
+                }).collect();
+                let idx = std::cell::Cell::new(0);
+                return Ok(Some(lua.create_function(move |lua, _: ()| {
+                    let i = idx.get();
+                    if i < items.len() {
+                        idx.set(i + 1);
+                        return Ok(MultiValue::from_iter(vec![
+                            Value::String(lua.create_string(&items[i].0)?),
+                            Value::String(lua.create_string(&items[i].1)?),
+                        ]));
+                    }
+                    Ok(MultiValue::new())
+                })?));
+            }
+            Ok(None)
+        })?)?;
         loop_table.set("hrtime", self.lua.create_function(|_, _: ()| { Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64) })?)?;
         loop_table.set("cwd", self.lua.create_function(|_, _: ()| { Ok(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string()) })?)?;
         loop_table.set("os_uname", self.lua.create_function(|lua, _: ()| {
