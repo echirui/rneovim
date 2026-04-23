@@ -682,6 +682,10 @@ impl LuaEnv {
         })?)?;
         vim.set("tbl_deep_extend", vim.get::<Value>("tbl_extend")?)?;
 
+        vim.set("tbl_count", self.lua.create_function(|_, t: Table| {
+            Ok(t.pairs::<Value, Value>().count())
+        })?)?;
+
         vim.set("tbl_get", self.lua.create_function(|_, (t, keys): (Table, MultiValue)| {
             let mut current = Value::Table(t);
             for key in keys {
