@@ -65,7 +65,7 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         }
         Request::CmdLineDeleteWord => {
             let cmd = state.cmdline().to_string();
-            let mut chars: Vec<char> = cmd.chars().collect();
+            let chars: Vec<char> = cmd.chars().collect();
             let cursor = state.cmdline_cursor.min(chars.len());
             
             if cursor > 0 {

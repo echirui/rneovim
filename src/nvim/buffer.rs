@@ -76,15 +76,11 @@ impl Buffer {
     }
 
     pub fn start_undo_group(&mut self) {
-        self.undo_group_stack.push(Vec::new());
+        self.undo_tree.start_group();
     }
 
     pub fn end_undo_group(&mut self) {
-        if let Some(group) = self.undo_group_stack.pop() {
-            if !group.is_empty() {
-                self.push_action(Action::Group(group));
-            }
-        }
+        self.undo_tree.end_group();
     }
 
     fn push_action(&mut self, action: Action) {
@@ -94,6 +90,7 @@ impl Buffer {
         if let Some(current_group) = self.undo_group_stack.last_mut() {
             current_group.push(action);
         } else {
+            // グループ外の単発操作
             self.undo_tree.push(action);
         }
     }

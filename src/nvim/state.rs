@@ -58,6 +58,7 @@ pub struct VimState {
     pub last_insert_cursor: Option<Cursor>,
     pub last_char_search: Option<Request>,
     pub last_search: Option<String>,
+    pub last_search_query: Option<String>,
     pub pending_key: Option<char>,
     pub pending_register: Option<char>,
     pub pending_op: Option<Operator>,
@@ -87,6 +88,7 @@ pub struct VimState {
     pub quit: bool,
     pub vim_did_enter: bool,
     pub lua_env: Rc<RefCell<LuaEnv>>,
+    pub eval_context: EvalContext,
 }
 
 #[derive(Clone)]
@@ -191,6 +193,7 @@ impl VimState {
             last_insert_cursor: None,
             last_char_search: None,
             last_search: None,
+            last_search_query: None,
             pending_key: None,
             pending_register: None,
             pending_op: None,
@@ -220,6 +223,7 @@ impl VimState {
             quit: false,
             vim_did_enter: false,
             lua_env: Rc::new(RefCell::new(LuaEnv::new())),
+            eval_context: EvalContext::new(),
         }
     }
 
@@ -321,7 +325,23 @@ impl VimState {
     pub fn cmdline(&self) -> &str { &self.cmdline }
 
     pub fn set_mode(&mut self, mode: Mode) {
+        let old_mode = self.mode;
         self.mode = mode;
+        
+        // モード遷移時のUndoグループ管理
+        match (old_mode, mode) {
+            (Mode::Normal, Mode::Insert) | (Mode::Normal, Mode::Visual(_)) => {
+                let buf = self.current_window().buffer();
+                buf.borrow_mut().start_undo_group();
+            }
+            (Mode::Insert, Mode::Normal) | (Mode::Visual(_), Mode::Normal) | (Mode::BlockInsert { .. }, Mode::Normal) => {
+                let buf = self.current_window().buffer();
+                buf.borrow_mut().end_undo_group();
+            }
+            // BlockInsert開始時は Visual からの移行なので、既にグループは開始されているはず
+            _ => {}
+        }
+
         if mode == Mode::CommandLine || mode == Mode::Search {
             self.cmdline.clear();
             self.cmdline_cursor = 0;

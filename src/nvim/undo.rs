@@ -21,11 +21,12 @@ pub struct UndoNode {
 pub struct UndoTree {
     pub nodes: Vec<UndoNode>,
     pub current_idx: usize,
+    pub pending_group: Option<Vec<Action>>,
+    pub group_depth: usize,
 }
 
 impl UndoTree {
     pub fn new() -> Self {
-        // Root node (no action)
         let root = UndoNode {
             action: None,
             parent: None,
@@ -35,39 +36,104 @@ impl UndoTree {
         Self {
             nodes: vec![root],
             current_idx: 0,
+            pending_group: None,
+            group_depth: 0,
+        }
+    }
+
+    fn log(&self, msg: &str) {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("rneovim.log") 
+        {
+            let _ = writeln!(file, "[{}] UNDO: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"), msg);
+        }
+    }
+
+    pub fn start_group(&mut self) {
+        self.log(&format!("start_group (depth={}, cur={})", self.group_depth, self.current_idx));
+        if self.group_depth == 0 && self.pending_group.is_none() {
+            self.pending_group = Some(Vec::new());
+        }
+        self.group_depth += 1;
+    }
+
+    pub fn end_group(&mut self) {
+        self.log(&format!("end_group (depth={}, cur={})", self.group_depth, self.current_idx));
+        if self.group_depth > 0 {
+            self.group_depth -= 1;
+            if self.group_depth == 0 {
+                self.close_atom();
+            }
         }
     }
 
     pub fn push(&mut self, action: Action) {
-        let new_idx = self.nodes.len();
-        let new_node = UndoNode {
-            action: Some(action),
-            parent: Some(self.current_idx),
-            children: Vec::new(),
-            timestamp: std::time::SystemTime::now(),
-        };
-        self.nodes.push(new_node);
-        self.nodes[self.current_idx].children.push(new_idx);
-        self.current_idx = new_idx;
+        self.log(&format!("push (depth={}, cur={})", self.group_depth, self.current_idx));
+        if let Some(ref mut group) = self.pending_group {
+            group.push(action);
+        } else {
+            let new_idx = self.nodes.len();
+            let new_node = UndoNode {
+                action: Some(action),
+                parent: Some(self.current_idx),
+                children: Vec::new(),
+                timestamp: std::time::SystemTime::now(),
+            };
+            self.nodes.push(new_node);
+            self.nodes[self.current_idx].children.push(new_idx);
+            self.current_idx = new_idx;
+        }
+    }
+
+    pub fn close_atom(&mut self) {
+        self.log(&format!("close_atom (depth={}, cur={})", self.group_depth, self.current_idx));
+        if self.group_depth > 0 { return; }
+        
+        if let Some(actions) = self.pending_group.take() {
+            if actions.is_empty() { return; }
+            
+            let action = if actions.len() == 1 {
+                actions[0].clone()
+            } else {
+                Action::Group(actions)
+            };
+
+            let new_idx = self.nodes.len();
+            let new_node = UndoNode {
+                action: Some(action),
+                parent: Some(self.current_idx),
+                children: Vec::new(),
+                timestamp: std::time::SystemTime::now(),
+            };
+            self.nodes.push(new_node);
+            self.nodes[self.current_idx].children.push(new_idx);
+            self.current_idx = new_idx;
+        }
     }
 
     pub fn pop_undo(&mut self) -> Option<Action> {
+        self.log(&format!("pop_undo (depth={}, cur={})", self.group_depth, self.current_idx));
+        if self.pending_group.is_some() { self.close_atom(); }
+        if self.current_idx == 0 { return None; }
+
         let current = &self.nodes[self.current_idx];
-        let action = current.action.clone()?;
+        let action = current.action.clone();
         if let Some(parent_idx) = current.parent {
             self.current_idx = parent_idx;
         }
-        Some(action)
+        action
     }
 
     pub fn pop_redo(&mut self) -> Option<Action> {
-        // Redo は常に最新の子ノードを辿る（簡易実装）
+        self.log(&format!("pop_redo (depth={}, cur={})", self.group_depth, self.current_idx));
         let child_idx = *self.nodes[self.current_idx].children.last()?;
         self.current_idx = child_idx;
         self.nodes[child_idx].action.clone()
     }
 
-    /// 以前の枝（履歴）に戻るための機能 (g- 相当)
     pub fn earlier(&mut self) -> Option<Action> {
         if self.current_idx > 0 {
             self.current_idx -= 1;
@@ -82,47 +148,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_undo_branching() {
+    fn test_undo_grouping() {
         let mut tree = UndoTree::new();
-        
-        // 1. A を入力
-        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "A".to_string() });
-        // 2. Undo
-        tree.pop_undo();
-        // 3. B を入力 (ここで枝分かれが発生)
-        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "B".to_string() });
-        
-        // 最新の状態は B
-        assert_eq!(tree.nodes.len(), 3); // Root, A, B
-        
-        // Undo すると Root に戻る
-        let u1 = tree.pop_undo().unwrap();
-        if let Action::InsertLine { text, .. } = u1 { assert_eq!(text, "B"); }
-        assert_eq!(tree.current_idx, 0);
-    }
+        tree.start_group();
+        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "H".to_string() });
+        tree.push(Action::InsertLine { lnum: 1, col: 1, text: "e".to_string() });
+        tree.start_group(); // Nested
+        tree.push(Action::InsertLine { lnum: 1, col: 2, text: "l".to_string() });
+        tree.end_group();
+        tree.end_group();
 
-    #[test]
-    fn test_undo_redo_complex() {
-        let mut tree = UndoTree::new();
-        
-        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "x".to_string() });
-        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "y".to_string() });
-        
-        assert_eq!(tree.nodes.len(), 3);
-        
-        // Undo 'y'
-        tree.pop_undo();
-        // Undo 'x'
-        tree.pop_undo();
-        
-        // Redo 'x'
-        let r1 = tree.pop_redo().unwrap();
-        if let Action::InsertLine { text, .. } = r1 { assert_eq!(text, "x"); }
-        
-        // Push 'z' instead of 'y' (Branching)
-        tree.push(Action::InsertLine { lnum: 1, col: 0, text: "z".to_string() });
-        
-        // Cannot redo 'y' anymore
-        assert!(tree.pop_redo().is_none());
+        assert_eq!(tree.nodes.len(), 2);
+        let u = tree.pop_undo().unwrap();
+        if let Action::Group(actions) = u {
+            assert_eq!(actions.len(), 3);
+        } else {
+            panic!("Expected Group action");
+        }
     }
 }

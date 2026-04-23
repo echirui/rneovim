@@ -26,11 +26,9 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             };
             let buf = state.current_window().buffer();
             let mut b = buf.borrow_mut();
-            if let Some(line) = b.get_line(row) {
-                let chars_count = line.chars().count();
-                if col < chars_count {
-                    let _ = b.delete_char(row, col + 1);
-                }
+            let chars_count = b.get_line(row).map(|l| l.chars().count()).unwrap_or(0);
+            if col < chars_count {
+                let _ = b.delete_char(row, col + 1);
                 let _ = b.insert_char(row, col, c);
                 drop(b);
                 state.current_window_mut().set_cursor(row, col + 1);
@@ -53,14 +51,13 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 let col = if append { anchor.col.max(cursor.col) + 1 } else { anchor.col.min(cursor.col) };
                 
                 let mut b = buf.borrow_mut();
+                b.start_undo_group();
                 for r in start_row..=end_row {
                     let _ = b.insert_char(r, col, c);
                 }
+                b.end_undo_group();
                 drop(b);
                 state.current_window_mut().set_cursor(cur.row, cur.col + 1);
-                // Update BlockInsert state to track new cursor/anchor if needed, 
-                // but usually in Vim, Block Insert only shows the update on the first line until Esc.
-                // We'll simplify and update all.
                 state.mode = Mode::BlockInsert { append, anchor: Cursor { row: anchor.row, col: anchor.col + 1 }, cursor: Cursor { row: cursor.row, col: cursor.col + 1 } };
                 return Ok(());
             }
@@ -134,11 +131,9 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             let buf = state.current_window().buffer();
             {
                 let mut b = buf.borrow_mut();
-                b.start_undo_group();
                 for _ in 0..count {
-                    b.delete_char(cur.row, cur.col + 1)?;
+                    let _ = b.delete_char(cur.row, cur.col + 1);
                 }
-                b.end_undo_group();
             }
             state.last_change = Some(Request::DeleteCharAtCursor { count });
         }
@@ -364,20 +359,20 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             let cur = win.cursor();
             let buf = win.buffer();
             let mut b = buf.borrow_mut();
-            if let Some(line) = b.get_line(cur.row) {
+            let char_opt = b.get_line(cur.row).and_then(|l| l.chars().nth(cur.col));
+            if let Some(c) = char_opt {
+                let new_c = if c.is_lowercase() {
+                    c.to_uppercase().next().unwrap()
+                } else if c.is_uppercase() {
+                    c.to_lowercase().next().unwrap()
+                } else {
+                    c
+                };
+                let line = b.get_line(cur.row).unwrap().to_string();
                 let mut chars: Vec<char> = line.chars().collect();
-                if let Some(c) = chars.get_mut(cur.col) {
-                    let new_c = if c.is_lowercase() {
-                        c.to_uppercase().next().unwrap()
-                    } else if c.is_uppercase() {
-                        c.to_lowercase().next().unwrap()
-                    } else {
-                        *c
-                    };
-                    *c = new_c;
-                    let new_line: String = chars.into_iter().collect();
-                    let _ = b.set_line(cur.row, cur.col, &new_line);
-                }
+                chars[cur.col] = new_c;
+                let new_line: String = chars.into_iter().collect();
+                let _ = b.set_line(cur.row, cur.col, &new_line);
             }
             state.current_window_mut().set_cursor(cur.row, cur.col + 1);
         }
@@ -428,7 +423,8 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 }
             }
             if let Some(c) = c_to_insert {
-                let _ = buf.borrow_mut().insert_char(cur.row, cur.col, c);
+                let mut b = buf.borrow_mut();
+                let _ = b.insert_char(cur.row, cur.col, c);
                 state.current_window_mut().set_cursor(cur.row, cur.col + 1);
             }
         }

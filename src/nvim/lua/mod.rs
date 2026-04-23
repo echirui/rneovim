@@ -5,7 +5,6 @@ use std::cell::RefCell;
 use crate::nvim::buffer::Buffer;
 use std::sync::mpsc::Sender;
 use crate::nvim::state::{VimState, AutoCmd, AutoCmdCallback, AutoCmdEvent, OptionValue};
-use crate::nvim::window::TabPage;
 use crate::nvim::event::event_loop::EventCallback;
 
 pub struct LuaEnv {

@@ -1,4 +1,4 @@
-use crate::nvim::state::{VimState, AutoCmdEvent};
+use crate::nvim::state::{VimState, AutoCmdEvent, Mode};
 use crate::nvim::window::TabPage;
 use crate::nvim::request::Request;
 use crate::nvim::error::Result;
@@ -53,18 +53,37 @@ pub fn handle_request(state: &mut VimState, req: Request) -> Result<()> {
     // RepeatLastChange is handled before other handlers to avoid recording IT as the last change
     if let Request::RepeatLastChange { count } = &req {
         if let Some(last) = state.last_change.clone() {
+            let buf = state.current_window().buffer();
+            buf.borrow_mut().start_undo_group();
             for _ in 0..*count {
                 handle_request(state, last.clone())?;
             }
+            buf.borrow_mut().end_undo_group();
         }
         return Ok(());
     }
 
-    handlers::state::handle(state, req.clone())?;
-    handlers::edit::handle(state, req.clone())?;
-    handlers::motion::handle(state, req.clone())?;
-    handlers::window::handle(state, req.clone())?;
-    handlers::cmdline::handle(state, req.clone())?;
+    let is_normal = matches!(state.mode, Mode::Normal);
+    if is_normal {
+        let buf = state.current_window().buffer();
+        buf.borrow_mut().start_undo_group();
+    }
+
+    let res: Result<()> = (|| {
+        handlers::state::handle(state, req.clone())?;
+        handlers::edit::handle(state, req.clone())?;
+        handlers::motion::handle(state, req.clone())?;
+        handlers::window::handle(state, req.clone())?;
+        handlers::cmdline::handle(state, req.clone())?;
+        Ok(())
+    })();
+
+    if is_normal {
+        let buf = state.current_window().buffer();
+        buf.borrow_mut().end_undo_group();
+    }
+
+    res?;
 
     match req {
         Request::LspDefinition => {
