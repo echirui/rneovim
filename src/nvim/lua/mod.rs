@@ -514,12 +514,9 @@ impl LuaEnv {
                 }
                 if let Ok(file) = opts.open(&path) {
                     let fd = state.next_fd;
-                    state.log(&format!("FS_OPEN: path={}, fd={}", path, fd));
                     state.open_files.insert(fd, file);
                     state.next_fd += 1;
                     return Ok(Value::Integer(fd as i64));
-                } else {
-                    state.log(&format!("FS_OPEN FAILED: path={}", path));
                 }
             }
             Ok(Value::Nil)
@@ -527,7 +524,6 @@ impl LuaEnv {
         loop_table.set("fs_close", self.lua.create_function(|lua, fd: i32| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
-                state.log(&format!("FS_CLOSE: fd={}", fd));
                 state.open_files.remove(&fd);
             }
             Ok(true)
@@ -563,7 +559,7 @@ impl LuaEnv {
         loop_table.set("fs_read", self.lua.create_function(|lua, (fd, size, offset): (i32, usize, i64)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
-                if let Some(mut file) = state.open_files.get(&fd) {
+                if let Some(file) = state.open_files.get_mut(&fd) {
                     use std::io::{Read, Seek, SeekFrom};
                     let mut buf = vec![0u8; size];
                     if offset >= 0 { let _ = file.seek(SeekFrom::Start(offset as u64)); }
@@ -577,7 +573,7 @@ impl LuaEnv {
         loop_table.set("fs_write", self.lua.create_function(|lua, (fd, data, offset): (i32, Value, i64)| {
             if let Some(mut wrapper) = lua.app_data_mut::<StateWrapper>() {
                 let state = unsafe { &mut *wrapper.0 };
-                if let Some(mut file) = state.open_files.get(&fd) {
+                if let Some(file) = state.open_files.get_mut(&fd) {
                     use std::io::{Write, Seek, SeekFrom};
                     let bytes = match data {
                         Value::String(s) => s.as_bytes().to_vec(),
