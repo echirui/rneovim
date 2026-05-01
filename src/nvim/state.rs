@@ -607,4 +607,61 @@ impl VimState {
             let _ = writeln!(file, "{}", entry);
         }
     }
+
+    pub fn show_notification(&mut self, msg: &str, level: Option<i32>) {
+        self.log(&format!("NOTIFICATION: level={:?}, msg={}", level, msg));
+        
+        let mut buf = Buffer::new();
+        let buf_id = self.next_fd; self.next_fd += 1;
+        buf.set_id(buf_id);
+        
+        let lines: Vec<String> = msg.lines().map(|s| s.to_string()).collect();
+        for (i, line) in lines.iter().enumerate() {
+            let _ = buf.insert_line(i + 1, line);
+        }
+        
+        let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0).max(20).min(self.grid.width - 10);
+        let height = lines.len().min(self.grid.height - 5);
+        
+        let mut config = crate::nvim::window::WinConfig::default();
+        config.relative = "editor".to_string();
+        config.width = width;
+        config.height = height;
+        config.row = 1.0; // Top
+        config.col = (self.grid.width - width - 2) as f64; // Right
+        config.focusable = false;
+        config.border = Some("rounded".to_string());
+        
+        let buf_rc = Rc::new(RefCell::new(buf));
+        self.buffers.push(buf_rc.clone());
+        
+        let mut win = Window::new_floating(buf_rc, config);
+        let win_id = self.next_win_id; self.next_win_id += 1;
+        win.set_id(win_id);
+        
+        self.current_tabpage_mut().windows.push(win);
+        
+        // Auto-close after 5 seconds
+        let callback_id = self.lua_env.lua.create_function(move |lua, _: ()| {
+            if let Some(wrapper) = lua.app_data_ref::<crate::nvim::lua::StateWrapper>() {
+                let state = unsafe { &mut **wrapper.0.as_ptr() };
+                for tp in &mut state.tabpages {
+                    if let Some(pos) = tp.windows.iter().position(|w| w.id() == win_id) {
+                        tp.windows.remove(pos);
+                        break;
+                    }
+                }
+            }
+            Ok(())
+        }).and_then(|f| self.lua_env.register_callback(mlua::Value::Function(f)));
+
+        if let Ok(id) = callback_id {
+            self.active_events.insert(self.next_event_id, UvEvent {
+                callback_id: id,
+                next_run: std::time::Instant::now() + std::time::Duration::from_secs(5),
+                repeat: None,
+            });
+            self.next_event_id += 1;
+        }
+    }
 }

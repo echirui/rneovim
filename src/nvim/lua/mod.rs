@@ -10,6 +10,7 @@ pub mod api;
 pub mod uv;
 pub mod util;
 pub mod diagnostic;
+pub mod treesitter;
 
 pub struct StateWrapper(pub RefCell<*mut VimState>);
 
@@ -58,6 +59,7 @@ impl LuaEnv {
         uv::register_uv(&self.lua, &vim).map_err(|e| NvimError::Api(format!("UV error: {}", e)))?;
         util::register_utils(&self.lua, &vim).map_err(|e| NvimError::Api(format!("Util error: {}", e)))?;
         diagnostic::register_diagnostic(&self.lua, &vim).map_err(|e| NvimError::Api(format!("Diagnostic error: {}", e)))?;
+        treesitter::register_treesitter(&self.lua, &vim).map_err(|e| NvimError::Api(format!("Treesitter error: {}", e)))?;
 
         let uv_table: Table = vim.get("uv")?;
         vim.set("loop", uv_table)?;
@@ -134,9 +136,17 @@ impl LuaEnv {
         vim.set("env", env)?;
 
         let v_vars = self.lua.create_table()?;
-        v_vars.set("version", 1001)?;
-        v_vars.set("count", 0)?;
+        v_vars.set("version", 10000)?; // 0.10.0
         vim.set("v", v_vars)?;
+
+        vim.set("version", self.lua.create_function(|lua, _: ()| {
+            let res = lua.create_table()?;
+            res.set("major", 0)?;
+            res.set("minor", 10)?;
+            res.set("patch", 0)?;
+            res.set("api_level", 12)?;
+            Ok(res)
+        })?)?;
 
         let loader = self.lua.create_table()?;
         loader.set("enable", self.lua.create_function(|_, _: ()| Ok(()))?)?;
@@ -150,10 +160,10 @@ impl LuaEnv {
         log.set("set_level", self.lua.create_function(|_, _: Value| Ok(()))?)?;
         vim.set("log", log)?;
 
-        vim.set("notify", self.lua.create_function(|lua, (msg, _level, _opts): (String, Option<i32>, Option<Table>)| {
+        vim.set("notify", self.lua.create_function(|lua, (msg, level, _opts): (String, Option<i32>, Option<Table>)| {
             if let Some(wrapper) = lua.app_data_ref::<StateWrapper>() {
                 let state = unsafe { &mut **wrapper.0.as_ptr() };
-                state.log(&format!("LUA NOTIFY: {}", msg));
+                state.show_notification(&msg, level);
             } else {
                 println!("LUA NOTIFY: {}", msg);
             }
