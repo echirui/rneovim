@@ -18,6 +18,9 @@ unsigned xpopcount_test(uint64_t x) {
 static struct termios orig_termios;
 
 void os_setup_terminal() {
+    if (!isatty(STDIN_FILENO)) {
+        return;
+    }
     tcgetattr(STDIN_FILENO, &orig_termios);
     struct termios raw = orig_termios;
     // Input flags: disable break, CR to NL, parity check, strip 8th bit, and flow control
@@ -31,10 +34,13 @@ void os_setup_terminal() {
     
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
+        perror("tcsetattr");
+    }
 }
 
 void os_restore_terminal() {
+    if (!isatty(STDIN_FILENO)) return;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
 }
 

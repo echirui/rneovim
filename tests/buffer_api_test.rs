@@ -59,9 +59,9 @@ fn test_extmark_tracking_complex() {
     }
 
     // Mark on "second" at col 0
-    let id1 = buf.borrow_mut().set_extmark(2, 0);
+    let id1 = buf.borrow_mut().set_extmark(1, None, 2, 0, None, None, None, vec![], "eol".to_string(), 0);
     // Mark on "third" at col 6
-    let id2 = buf.borrow_mut().set_extmark(3, 6);
+    let id2 = buf.borrow_mut().set_extmark(1, None, 3, 6, None, None, None, vec![], "eol".to_string(), 0);
 
     // Insert a line at the top
     state.current_window_mut().set_cursor(1, 0);
@@ -70,8 +70,8 @@ fn test_extmark_tracking_complex() {
 
     {
         let b = buf.borrow();
-        let m1 = b.get_extmark(id1).unwrap();
-        let m2 = b.get_extmark(id2).unwrap();
+        let m1 = b.get_extmark(1, id1).unwrap();
+        let m2 = b.get_extmark(1, id2).unwrap();
         // Rows should be shifted
         assert_eq!(m1.row, 3);
         assert_eq!(m2.row, 4);
@@ -85,7 +85,7 @@ fn test_extmark_tracking_complex() {
     
     {
         let b = buf.borrow();
-        let m2 = b.get_extmark(id2).unwrap();
+        let m2 = b.get_extmark(1, id2).unwrap();
         assert_eq!(m2.row, 4);
         assert_eq!(m2.col, 6 + "prefix ".chars().count());
     }

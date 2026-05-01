@@ -38,14 +38,12 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
         Request::OpenFloatWin { buf_id, row, col, width, height } => {
             let buf_opt = state.buffers.iter().find(|b| b.borrow().id() == buf_id).cloned();
             if let Some(buf) = buf_opt {
-                let config = crate::nvim::window::WinConfig {
-                    row: row as usize,
-                    col: col as usize,
-                    width: width as usize,
-                    height: height as usize,
-                    focusable: true,
-                    external: false,
-                };
+                let mut config = crate::nvim::window::WinConfig::default();
+                config.row = row as f64;
+                config.col = col as f64;
+                config.width = width as usize;
+                config.height = height as usize;
+                
                 let new_win = crate::nvim::window::Window::new_floating(buf, config);
                 let tp = state.current_tabpage_mut();
                 tp.windows.push(new_win);
@@ -78,6 +76,14 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 b.undo_enabled = true;
                 b.set_name(&path);
                 b.clear_modified();
+
+                if let Some(lsp) = &state.lsp_client {
+                    let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| std::path::PathBuf::from(&path));
+                    let uri = format!("file://{}", abs_path.to_string_lossy());
+                    let text = b.get_all_lines().join("\n");
+                    let lang = if path.ends_with(".py") { "python" } else if path.ends_with(".rs") { "rust" } else { "text" };
+                    lsp.send_did_open(&uri, lang, &text);
+                }
             }
             state.current_window_mut().set_cursor(1, 0);
         }
@@ -349,6 +355,18 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
                 let cwd = std::env::current_dir().unwrap_or_default().display().to_string();
                 let uri = format!("file://{}", cwd);
                 client.send_initialize(&uri);
+
+                for buf_rc in &state.buffers {
+                    if let Ok(b) = buf_rc.try_borrow() {
+                        if let Some(name) = b.name() {
+                            let abs_path = std::fs::canonicalize(name).unwrap_or_else(|_| std::path::PathBuf::from(name));
+                            let uri = format!("file://{}", abs_path.to_string_lossy());
+                            let text = b.get_all_lines().join("\n");
+                            let lang = if name.ends_with(".py") { "python" } else if name.ends_with(".rs") { "rust" } else { "text" };
+                            client.send_did_open(&uri, lang, &text);
+                        }
+                    }
+                }
                 state.lsp_client = Some(client);
             }
         }

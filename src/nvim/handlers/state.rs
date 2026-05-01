@@ -18,9 +18,9 @@ pub fn handle(state: &mut VimState, req: Request) -> Result<()> {
             
             // オートコマンドの発火
             if m == Mode::Insert && old_mode != Mode::Insert {
-                trigger_autocmd(state, AutoCmdEvent::InsertEnter);
+                trigger_autocmd(state, AutoCmdEvent::InsertEnter, None);
             } else if old_mode == Mode::Insert && m != Mode::Insert {
-                trigger_autocmd(state, AutoCmdEvent::InsertLeave);
+                trigger_autocmd(state, AutoCmdEvent::InsertLeave, None);
             }
         }
         Request::SetVisualMode(vmode) => {

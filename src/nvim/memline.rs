@@ -199,9 +199,10 @@ pub struct MemLine {
 }
 
 impl MemLine {
+    /// 新しい MemLine を作成する。最初は空の状態にする。
     pub fn new() -> Self {
         Self {
-            root: Node::new_leaf(),
+            root: Node::Leaf(vec![]),
         }
     }
 

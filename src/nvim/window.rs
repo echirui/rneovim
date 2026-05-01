@@ -15,15 +15,42 @@ pub struct Cursor {
     pub col: usize, // 0-based
 }
 
-/// フローティングウィンドウの設定
-#[derive(Debug, Clone)]
+/// フローティングウィンドウの設定 (Neovim 互換)
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WinConfig {
-    pub row: usize,
-    pub col: usize,
+    pub relative: String, // "editor", "win", "cursor", "mouse"
+    pub win: Option<i32>,
+    pub anchor: String,   // "NW", "NE", "SW", "SE"
+    pub row: f64,
+    pub col: f64,
     pub width: usize,
     pub height: usize,
     pub focusable: bool,
     pub external: bool,
+    pub border: Option<String>, // "none", "single", "double", "rounded", etc.
+    pub zindex: i32,
+    pub title: Option<String>,
+    pub footer: Option<String>,
+}
+
+impl Default for WinConfig {
+    fn default() -> Self {
+        Self {
+            relative: "editor".to_string(),
+            win: None,
+            anchor: "NW".to_string(),
+            row: 0.0,
+            col: 0.0,
+            width: 80,
+            height: 24,
+            focusable: true,
+            external: false,
+            border: None,
+            zindex: 50,
+            title: None,
+            footer: None,
+        }
+    }
 }
 
 /// Represents a Neovim window (win_T).
@@ -72,12 +99,18 @@ impl Window {
     }
 
     pub fn id(&self) -> i32 { self.id }
+    pub fn set_id(&mut self, id: i32) { self.id = id; }
     pub fn cursor(&self) -> Cursor { self.cursor }
     pub fn topline(&self) -> usize { self.topline }
     pub fn height(&self) -> usize { self.height }
+    pub fn width(&self) -> usize { self.width }
     pub fn set_height(&mut self, h: usize) { self.height = h; }
     pub fn set_width(&mut self, w: usize) { self.width = w; }
     pub fn buffer(&self) -> Rc<RefCell<Buffer>> { Rc::clone(&self.buffer) }
+
+    pub fn set_buffer(&mut self, buffer: Rc<RefCell<Buffer>>) {
+        self.buffer = buffer;
+    }
     pub fn config(&self) -> Option<&WinConfig> { self.config.as_ref() }
     pub fn is_floating(&self) -> bool { self.config.is_some() }
 

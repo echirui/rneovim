@@ -93,8 +93,14 @@ fn test_ex_editing_commands() {
     {
         let buf = state.current_window().buffer();
         let mut b = buf.borrow_mut();
-        b.append_line("first").unwrap();
+        // 初期状態の空行がある場合はそれを使う、なければappend
+        if b.line_count() > 0 {
+            b.set_line(1, 0, "first").unwrap();
+        } else {
+            b.append_line("first").unwrap();
+        }
         b.append_line("second").unwrap();
+        b.clear_undo();
     }
 
     // :undo

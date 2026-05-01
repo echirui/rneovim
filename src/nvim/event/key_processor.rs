@@ -10,9 +10,50 @@ impl KeyProcessor {
     }
 
     pub fn process_keys(&self, state: &mut VimState, keys: &str) -> Result<(), crate::nvim::error::NvimError> {
-        for c in keys.chars() {
-            if let Some(req) = self.process_key(state, c) {
-                handle_request(state, req)?;
+        state.input_buffer.push_str(keys);
+        
+        while !state.input_buffer.is_empty() {
+            let mode_str = match state.mode {
+                Mode::Normal => "n", Mode::Insert => "i", 
+                Mode::Visual(VisualMode::Char) => "v", Mode::Visual(VisualMode::Line) => "V", Mode::Visual(VisualMode::Block) => "\x16",
+                Mode::CommandLine | Mode::Search => "c", Mode::Terminal => "t",
+                _ => "",
+            };
+
+            let (resolved, consumed) = state.keymap.resolve(mode_str, &state.input_buffer);
+            
+            if consumed > 0 {
+                let remaining = state.input_buffer.split_off(consumed);
+                let mapping = resolved.unwrap();
+                match mapping.target {
+                    crate::nvim::keymap::MappingTarget::String(s) => {
+                        if mapping.recursive {
+                            let mut new_buf = s;
+                            new_buf.push_str(&remaining);
+                            state.input_buffer = new_buf;
+                        } else {
+                            state.input_buffer = remaining;
+                            for c in s.chars() {
+                                if let Some(req) = self.process_key(state, c) {
+                                    handle_request(state, req)?;
+                                }
+                            }
+                        }
+                    }
+                    crate::nvim::keymap::MappingTarget::Lua(id) => {
+                        state.input_buffer = remaining;
+                        state.lua_env.execute_callback(id)?;
+                    }
+                }
+            } else if resolved.is_none() && !state.input_buffer.is_empty() {
+                let c = state.input_buffer.chars().next().unwrap();
+                let c_len = c.len_utf8();
+                state.input_buffer = state.input_buffer[c_len..].to_string();
+                if let Some(req) = self.process_key(state, c) {
+                    handle_request(state, req)?;
+                }
+            } else {
+                break;
             }
         }
         Ok(())

@@ -46,6 +46,10 @@ pub struct Buffer {
     pub lsp_synced_version: u64,
     /// Whether didOpen has been sent for this buffer
     pub is_lsp_opened: bool,
+    /// Buffer-local options
+    pub options: HashMap<String, crate::nvim::state::OptionValue>,
+    /// Buffer-local variables (b: vars)
+    pub vars: HashMap<String, crate::nvim::eval::TypVal>,
 }
 
 impl Buffer {
@@ -72,7 +76,41 @@ impl Buffer {
             version: 1,
             lsp_synced_version: 0,
             is_lsp_opened: false,
+            options: HashMap::new(),
+            vars: HashMap::new(),
         }
+    }
+
+    pub fn get_var(&self, name: &str) -> Option<&crate::nvim::eval::TypVal> {
+        self.vars.get(name)
+    }
+
+    pub fn set_var(&mut self, name: &str, value: crate::nvim::eval::TypVal) {
+        self.vars.insert(name.to_string(), value);
+    }
+
+    pub fn get_option(&self, name: &str) -> Option<&crate::nvim::state::OptionValue> {
+        self.options.get(name)
+    }
+
+    pub fn set_option(&mut self, name: &str, value: crate::nvim::state::OptionValue) {
+        self.options.insert(name.to_string(), value);
+    }
+
+    pub fn id(&self) -> i32 {
+        self.id
+    }
+
+    pub fn set_id(&mut self, id: i32) {
+        self.id = id;
+    }
+
+    pub fn is_readonly(&self) -> bool {
+        self.readonly
+    }
+
+    pub fn is_modified(&self) -> bool {
+        self.modified
     }
 
     pub fn start_undo_group(&mut self) {
@@ -95,12 +133,35 @@ impl Buffer {
         }
     }
 
-    pub fn set_extmark(&mut self, row: usize, col: usize) -> i32 {
-        self.extmark_manager.set_extmark(row, col)
+    pub fn set_extmark(
+        &mut self,
+        ns_id: i32,
+        mark_id: Option<i32>,
+        row: usize,
+        col: usize,
+        end_row: Option<usize>,
+        end_col: Option<usize>,
+        hl_group: Option<String>,
+        virt_text: Vec<(String, String)>,
+        virt_text_pos: String,
+        priority: i32,
+    ) -> i32 {
+        self.extmark_manager.set_extmark(
+            ns_id,
+            mark_id,
+            row,
+            col,
+            end_row,
+            end_col,
+            hl_group,
+            virt_text,
+            virt_text_pos,
+            priority,
+        )
     }
 
-    pub fn get_extmark(&self, id: i32) -> Option<crate::nvim::extmark::Extmark> {
-        self.extmark_manager.get_extmark(id)
+    pub fn get_extmark(&self, ns_id: i32, id: i32) -> Option<crate::nvim::extmark::Extmark> {
+        self.extmark_manager.get_extmark(ns_id, id).cloned()
     }
 
     pub fn set_mark(&mut self, name: char, cursor: Cursor) {
@@ -111,8 +172,16 @@ impl Buffer {
         self.marks.get(&name).copied()
     }
 
-    pub fn id(&self) -> i32 {
-        self.id
+    pub fn set_text(&mut self, sr: usize, _sc: usize, er: usize, _ec: usize, replacement: Vec<String>) -> Result<()> {
+        // Simplified range replacement for now (line-based)
+        let count = if er >= sr { er - sr + 1 } else { 0 };
+        for _ in 0..count {
+            if sr <= self.line_count() { let _ = self.delete_line(sr); }
+        }
+        for (i, line) in replacement.into_iter().enumerate() {
+            let _ = self.insert_line(sr + i, &line);
+        }
+        Ok(())
     }
 
     pub fn clear_undo(&mut self) {
@@ -381,10 +450,6 @@ impl Buffer {
         self.modified = true;
         self.version += 1;
         Ok(())
-    }
-
-    pub fn is_modified(&self) -> bool {
-        self.modified
     }
 
     pub fn set_name(&mut self, name: &str) {
